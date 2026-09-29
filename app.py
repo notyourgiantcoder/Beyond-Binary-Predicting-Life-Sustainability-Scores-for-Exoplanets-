@@ -88,10 +88,10 @@ HELP = {
 }
 
 # ── Palette ───────────────────────────────────────────────────────────────────
-CYAN, VIOLET, AMBER = "#00e5ff", "#8b5cf6", "#ffb547"
-INK, INK_MUTED = "#e6ecff", "#8fa0c8"
-GRID, TRACK = "rgba(230,236,255,0.08)", "rgba(230,236,255,0.06)"
-RED, ORANGE, YELLOW, GREEN = "#ff5c7a", "#ff8a3d", "#ffd23f", "#2ee59d"
+ACCENT, ACCENT2, REF = "#c6f432", "#5eead4", "#ff8a5b"   # lime, mint, coral (Earth)
+INK, INK_MUTED = "#f4f5f7", "#8d929c"
+GRID, TRACK = "rgba(244,245,247,0.07)", "rgba(244,245,247,0.05)"
+RED, ORANGE, YELLOW, GREEN = "#ff5c7a", "#ff9f43", "#ffd43b", "#34d399"
 FONT = "Inter, sans-serif"
 
 # One height per chart role, one margin for every chart
@@ -103,27 +103,43 @@ BAR_H, PCT_H, GAUGE_H, RADAR_H = 240, 140, 260, 440
 st.set_page_config(page_title="Beyond Binary", page_icon="🪐", layout="wide")
 
 
-def _stars(n: int, seed: int, color: str) -> str:
-    """box-shadow list of n random stars on a 2560×2000 tile."""
+def _constellation_svg(seed: int, groups: int, dust: int) -> str:
+    """A 2000×2000 SVG sky: `groups` constellations (stars joined by thin lines) plus `dust` faint stars."""
     rng = random.Random(seed)
-    return ", ".join(f"{rng.randint(0, 2560)}px {rng.randint(0, 2000)}px {color}" for _ in range(n))
+    parts = []
+    for _ in range(groups):
+        cx, cy = rng.uniform(80, 1920), rng.uniform(80, 1920)
+        pts = [(cx + rng.uniform(-170, 170), cy + rng.uniform(-170, 170)) for _ in range(rng.randint(4, 8))]
+        # chain each star to its nearest unvisited neighbour -> constellation-like strokes
+        chain, rest = [pts[0]], pts[1:]
+        while rest:
+            nxt = min(rest, key=lambda q: (q[0] - chain[-1][0]) ** 2 + (q[1] - chain[-1][1]) ** 2)
+            chain.append(nxt); rest.remove(nxt)
+        parts.append('<polyline class="cl" points="' + " ".join(f"{x:.0f},{y:.0f}" for x, y in chain) + '"/>')
+        for i, (x, y) in enumerate(chain):
+            r = rng.choice([1.6, 2, 2.4, 3]) if i else 3.2
+            cls = "cs hi" if rng.random() < .25 else "cs"
+            parts.append(f'<circle class="{cls}" cx="{x:.0f}" cy="{y:.0f}" r="{r}" '
+                         f'style="animation-delay:{rng.uniform(0, 6):.1f}s"/>')
+    for _ in range(dust):
+        parts.append(f'<circle class="cd" cx="{rng.uniform(0, 2000):.0f}" cy="{rng.uniform(0, 2000):.0f}" '
+                     f'r="{rng.choice([.8, 1, 1.2])}"/>')
+    return f'<svg viewBox="0 0 2000 2000" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">{"".join(parts)}</svg>'
 
 
-STARS_SM = _stars(420, 1, "rgba(230,236,255,0.75)")
-STARS_MD = _stars(140, 2, "rgba(170,220,255,0.9)")
-STARS_LG = _stars(45, 3, "#ffffff")
-STARFIELD_HTML = ('<div class="starfield"><div class="stars s1"></div>'
-                  '<div class="stars s2"></div><div class="stars s3"></div></div>')
+# Two layers revolving in opposite directions at different speeds give depth
+STARFIELD_HTML = ('<div class="starfield"><div class="sky sky-a">' + _constellation_svg(7, 26, 0) + '</div>'
+                  '<div class="sky sky-b">' + _constellation_svg(11, 0, 260) + '</div></div>')
 
 CSS = f"""
-@import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@500;700;900&family=Inter:wght@400;500;600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
 
 /* ── Design tokens ─────────────────────────────────────────────────────── */
 :root {{
-  --cyan:{CYAN}; --violet:{VIOLET}; --amber:{AMBER};
+  --accent:{ACCENT}; --accent2:{ACCENT2}; --ref:{REF};
   --ink:{INK}; --muted:{INK_MUTED};
-  --glass:rgba(255,255,255,0.04); --glass-border:rgba(255,255,255,0.08); --glass-hover:rgba(0,229,255,0.28);
-  --glow: 0 0 0 1px rgba(0,229,255,0.08), 0 8px 32px rgba(0,229,255,0.10);
+  --glass:rgba(17,18,22,0.82);   /* mostly opaque so the moving sky never runs through text */ --glass-border:rgba(255,255,255,0.07); --glass-hover:rgba(255,255,255,0.16);
+  --glow: 0 8px 28px rgba(0,0,0,0.35);
   --space-1: 4px; --space-2: 8px; --space-3: 16px; --space-4: 24px; --space-5: 32px; --space-6: 48px;
   --radius: 16px; --radius-sm: 12px; --radius-pill: 999px;
   --fs-page: clamp(1.75rem, 3.2vw, 2.5rem);   /* page title   */
@@ -135,27 +151,27 @@ CSS = f"""
   --t: 200ms ease;
 }}
 
-/* ── Space background + starfield ─────────────────────────────────────── */
+/* ── Background: graphite + revolving constellations ──────────────────── */
 .stApp {{
-  background: radial-gradient(ellipse at 20% 0%, rgba(139,92,246,0.18), transparent 55%),
-              radial-gradient(ellipse at 90% 100%, rgba(0,229,255,0.10), transparent 50%),
-              linear-gradient(160deg, #05070f 0%, #0b1026 55%, #150d2e 100%) fixed;
+  background: radial-gradient(ellipse 80% 60% at 50% -10%, rgba(198,244,50,0.06), transparent 60%), #08090b fixed;
   isolation: isolate; color: var(--ink);
 }}
 [data-testid="stAppViewContainer"], [data-testid="stMain"], [data-testid="stHeader"],
 [data-testid="stBottomBlockContainer"] {{ background: transparent !important; }}
 .starfield {{ position: fixed; inset: 0; z-index: -1; pointer-events: none; overflow: hidden; }}
-.stars {{ position: absolute; top: 0; left: 0; border-radius: 50%; background: transparent; }}
-.stars::after {{ content: ""; position: absolute; top: 2000px; left: 0; border-radius: 50%;
-                 width: inherit; height: inherit; box-shadow: inherit; }}
-.s1 {{ width: 1px; height: 1px; box-shadow: {STARS_SM};
-       animation: drift 240s linear infinite, twinkle 5s ease-in-out infinite alternate; }}
-.s2 {{ width: 2px; height: 2px; box-shadow: {STARS_MD};
-       animation: drift 160s linear infinite, twinkle 3.5s ease-in-out infinite alternate-reverse; }}
-.s3 {{ width: 3px; height: 3px; box-shadow: {STARS_LG};
-       animation: drift 110s linear infinite, twinkle 2.5s ease-in-out infinite alternate; }}
-@keyframes drift {{ from {{ transform: translateY(0); }} to {{ transform: translateY(-2000px); }} }}
+.sky {{ position: absolute; left: 50%; top: 50%; width: max(150vmax, 1600px); aspect-ratio: 1;
+        will-change: transform; }}
+.sky svg {{ width: 100%; height: 100%; display: block; }}
+.sky-a {{ animation: revolve 360s linear infinite; }}
+.sky-b {{ animation: revolve 600s linear infinite reverse; }}
+@keyframes revolve {{ from {{ transform: translate(-50%, -50%) rotate(0deg); }}
+                      to   {{ transform: translate(-50%, -50%) rotate(360deg); }} }}
+.sky .cl {{ fill: none; stroke: rgba(244,245,247,0.10); stroke-width: 1; }}
+.sky .cs {{ fill: rgba(244,245,247,0.75); animation: twinkle 4s ease-in-out infinite alternate; }}
+.sky .cs.hi {{ fill: var(--accent); }}
+.sky .cd {{ fill: rgba(244,245,247,0.35); }}
 @keyframes twinkle {{ from {{ opacity: .35; }} to {{ opacity: 1; }} }}
+@media (prefers-reduced-motion: reduce) {{ .sky, .sky .cs {{ animation: none; transform: translate(-50%, -50%); }} }}
 
 /* Invisible helper elements (CSS, starfield, markers) take no layout space */
 [data-testid="stElementContainer"]:has(.starfield),
@@ -173,16 +189,16 @@ CSS = f"""
 }}
 html, body, .stApp, p, label, input, textarea {{ font-family: 'Inter', sans-serif; }}
 .stApp p, .stApp li {{ font-size: var(--fs-body); }}
-h1, h2, h3 {{ font-family: 'Orbitron', sans-serif !important; letter-spacing: .02em; color: var(--ink); }}
-a {{ color: var(--cyan); }}
+h1, h2, h3 {{ font-family: 'Inter', sans-serif !important; letter-spacing: -0.02em; color: var(--ink); }}
+.stApp a, .stApp a:visited {{ color: var(--accent) !important; text-decoration-color: rgba(198,244,50,0.4); }}
 /* Streamlit pulls every markdown block up 16px to cancel <p> margins; our HTML blocks have none */
 [data-testid="stMarkdownContainer"]:has(> div:first-child, > ol:first-child) {{ margin-bottom: 0 !important; }}
 
 /* Thin themed scrollbars */
-* {{ scrollbar-width: thin; scrollbar-color: rgba(139,92,246,0.5) transparent; }}
+* {{ scrollbar-width: thin; scrollbar-color: rgba(94,234,212,0.5) transparent; }}
 ::-webkit-scrollbar {{ width: 8px; height: 8px; }}
 ::-webkit-scrollbar-track {{ background: transparent; }}
-::-webkit-scrollbar-thumb {{ background: linear-gradient(var(--cyan), var(--violet)); border-radius: var(--radius-pill); }}
+::-webkit-scrollbar-thumb {{ background: linear-gradient(var(--accent), var(--accent2)); border-radius: var(--radius-pill); }}
 
 /* One-time fade-in after the splash: opacity only, so nothing shifts */
 .boot-fade {{ display: none; }}
@@ -192,25 +208,21 @@ a {{ color: var(--cyan); }}
 
 /* ── Type scale: hero, sections, cards ─────────────────────────────────── */
 .hero {{ margin-bottom: var(--space-2); }}
-.hero-eyebrow {{ color: var(--cyan); font-size: var(--fs-caption); font-weight: 600; letter-spacing: .22em;
+.hero-eyebrow {{ color: var(--accent); font-size: var(--fs-caption); font-weight: 600; letter-spacing: .22em;
                 text-transform: uppercase; margin-bottom: var(--space-2); }}
-.hero-title {{ font-family: 'Orbitron', sans-serif; font-weight: 900; font-size: var(--fs-page);
-              line-height: 1.15; margin: 0 0 var(--space-2) 0;
-              background: linear-gradient(90deg, #e6ecff 0%, var(--cyan) 45%, var(--violet) 100%);
-              -webkit-background-clip: text; background-clip: text; color: transparent;
-              filter: drop-shadow(0 0 18px rgba(0,229,255,0.18)); }}
+.hero-title {{ font-family: 'Inter', sans-serif; font-weight: 600; font-size: var(--fs-page); color: var(--ink);
+              line-height: 1.1; letter-spacing: -0.035em; margin: 0 0 var(--space-2) 0; }}
 .hero-title.sub-page {{ font-size: calc(var(--fs-page) * .75); margin-top: var(--space-2); }}
 .hero-sub {{ color: var(--muted); font-size: 1rem; line-height: 1.6; max-width: 780px; }}
 /* A section = title + accent bar (+ caption). 16px margin + 16px block gap = 32px between sections */
-.section-title {{ font-family: 'Orbitron', sans-serif; font-size: var(--fs-section); font-weight: 700;
-                 letter-spacing: .04em; color: var(--ink); margin-top: var(--space-3); }}
+.section-title {{ font-family: 'Inter', sans-serif; font-size: var(--fs-section); font-weight: 700;
+                 letter-spacing: -0.01em; color: var(--ink); margin-top: var(--space-3); }}
 .section-title::after {{ content: ""; display: block; width: 36px; height: 2px; margin-top: var(--space-2);
-                        border-radius: 2px; background: linear-gradient(90deg, var(--cyan), var(--violet));
-                        box-shadow: 0 0 8px rgba(0,229,255,0.5); }}
+                        border-radius: 2px; background: linear-gradient(90deg, var(--accent), var(--accent2)); }}
 .section-sub {{ color: var(--muted); font-size: var(--fs-caption); margin-top: var(--space-2); }}
 .grp-head {{ display: flex; align-items: center; gap: var(--space-2); }}
 .grp-icon {{ font-size: 1.2rem; line-height: 1; width: 1.4rem; text-align: center; }}
-.grp-title {{ font-family: 'Orbitron', sans-serif; font-weight: 700; font-size: var(--fs-card); color: var(--ink); }}
+.grp-title {{ font-family: 'Inter', sans-serif; font-weight: 600; letter-spacing: -0.01em; font-size: var(--fs-card); color: var(--ink); }}
 .grp-cap {{ color: var(--muted); font-size: var(--fs-caption); margin-top: var(--space-1); }}
 
 /* ── Glass cards ───────────────────────────────────────────────────────── */
@@ -243,18 +255,18 @@ a {{ color: var(--cyan); }}
 @media (max-width: 640px) {{ .kpi-grid {{ gap: var(--space-3); }} .kpi {{ padding: var(--space-3); }} }}
 .kpi {{ padding: var(--space-4); display: grid; grid-template-rows: auto auto 1fr; row-gap: var(--space-2); }}
 .kpi-label {{ color: var(--muted); font-size: var(--fs-caption); font-weight: 500; }}
-.kpi-value {{ font-family: 'Orbitron', sans-serif; font-size: var(--fs-kpi); font-weight: 700; color: var(--ink);
-             line-height: 1.1; text-shadow: 0 0 18px rgba(0,229,255,0.25); }}
+.kpi-value {{ font-family: 'Inter', sans-serif; font-size: var(--fs-kpi); font-weight: 700; color: var(--ink);
+             line-height: 1.1; letter-spacing: -0.03em; font-variant-numeric: tabular-nums; }}
 .kpi-desc {{ color: var(--muted); font-size: var(--fs-caption); align-self: end; }}
 
 .pills {{ display: flex; flex-wrap: wrap; gap: var(--space-2); }}
 .pill {{ font-size: var(--fs-caption); font-weight: 600; padding: var(--space-1) var(--space-3); border-radius: var(--radius-pill);
          border: 1px solid var(--glass-border); background: rgba(255,255,255,0.05); color: var(--ink); }}
-.pill.cyan {{ border-color: rgba(0,229,255,0.4); color: var(--cyan); background: rgba(0,229,255,0.08); }}
-.pill.violet {{ border-color: rgba(139,92,246,0.45); color: #c4b5fd; background: rgba(139,92,246,0.10); }}
-.pill.amber {{ border-color: rgba(255,181,71,0.45); color: var(--amber); background: rgba(255,181,71,0.08); }}
+.pill.cyan {{ border-color: rgba(198,244,50,0.4); color: var(--accent); background: rgba(198,244,50,0.08); }}
+.pill.violet {{ border-color: rgba(94,234,212,0.45); color: #99f6e4; background: rgba(94,234,212,0.10); }}
+.pill.amber {{ border-color: rgba(255,138,91,0.45); color: var(--ref); background: rgba(255,138,91,0.08); }}
 
-.formula {{ font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: var(--fs-caption); color: var(--cyan);
+.formula {{ font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: var(--fs-caption); color: var(--accent);
            padding: var(--space-3) var(--space-4); line-height: 1.6; }}
 
 /* Tables: full width, fixed row rhythm, numbers right / text left */
@@ -267,15 +279,15 @@ a {{ color: var(--cyan); }}
 .gtable th:first-child, .gtable td:first-child {{ padding-left: 0; }}
 .gtable th:last-child, .gtable td:last-child {{ padding-right: 0; }}
 .gtable tr:last-child td {{ border-bottom: none; }}
-.gtable tr.best td {{ color: var(--cyan); font-weight: 600; background: rgba(0,229,255,0.06); }}
-.gtable tr.best td:first-child {{ box-shadow: inset 3px 0 0 var(--cyan); padding-left: var(--space-3); }}
+.gtable tr.best td {{ color: var(--accent); font-weight: 600; background: rgba(198,244,50,0.06); }}
+.gtable tr.best td:first-child {{ box-shadow: inset 3px 0 0 var(--accent); padding-left: var(--space-3); }}
 .gtable .r {{ text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }}
 
-.notice {{ padding: var(--space-3) var(--space-4); border-left: 3px solid var(--cyan) !important; }}
-.notice.warn {{ border-left-color: var(--amber) !important; }}
+.notice {{ padding: var(--space-3) var(--space-4); border-left: 3px solid var(--accent) !important; }}
+.notice.warn {{ border-left-color: var(--ref) !important; }}
 .notice.error {{ border-left-color: {RED} !important; }}
 .notice.center {{ text-align: center; max-width: 720px; margin: 0 auto; padding: var(--space-4); border-left-width: 1px !important; }}
-.notice.center.warn {{ border-color: rgba(255,181,71,0.45) !important; }}
+.notice.center.warn {{ border-color: rgba(255,138,91,0.45) !important; }}
 .notice.center.error {{ border-color: rgba(255,92,122,0.45) !important; }}
 .notice-title {{ font-weight: 600; color: var(--ink); font-size: var(--fs-body); }}
 .notice-desc {{ color: var(--muted); font-size: var(--fs-caption); margin-top: var(--space-1); }}
@@ -284,20 +296,20 @@ a {{ color: var(--cyan); }}
 .flow {{ display: flex; align-items: stretch; }}
 .node {{ flex: 1 1 0; min-width: 0; padding: var(--space-4) var(--space-3); text-align: center; position: relative;
          display: flex; flex-direction: column; align-items: center; gap: var(--space-1);
-         box-shadow: 0 0 24px rgba(0,229,255,0.06), inset 0 0 18px rgba(139,92,246,0.06); }}
+         }}
 .node::before {{ content: ""; position: absolute; top: -1px; left: 20%; right: 20%; height: 2px; border-radius: 2px;
-                 background: linear-gradient(90deg, transparent, var(--cyan), transparent); opacity: .8; }}
+                 background: linear-gradient(90deg, transparent, var(--accent), transparent); opacity: .8; }}
 .node-icon {{ font-size: 1.5rem; line-height: 1; margin-bottom: var(--space-1); }}
-.node-idx {{ font-family: 'Orbitron', sans-serif; font-size: .66rem; color: var(--cyan); letter-spacing: .18em; }}
+.node-idx {{ font-family: 'Inter', sans-serif; font-size: .66rem; color: var(--accent); letter-spacing: .18em; }}
 .node-title {{ font-weight: 600; color: var(--ink); font-size: var(--fs-body); }}
-.node-val {{ font-family: 'Orbitron', sans-serif; font-weight: 700; font-size: 1.05rem; margin: var(--space-1) 0;
-            color: var(--ink); text-shadow: 0 0 14px rgba(0,229,255,0.35); }}
+.node-val {{ font-family: 'Inter', sans-serif; font-weight: 700; font-size: 1.05rem; margin: var(--space-1) 0;
+            color: var(--ink); letter-spacing: -0.02em; }}
 .node-desc {{ color: var(--muted); font-size: .75rem; line-height: 1.4; text-wrap: balance; }}
 .link {{ flex: 0 0 var(--space-5); position: relative; align-self: center; height: 2px;
-         background: linear-gradient(90deg, rgba(0,229,255,0.2), var(--cyan), rgba(139,92,246,0.6));
+         background: linear-gradient(90deg, rgba(198,244,50,0.2), var(--accent), rgba(94,234,212,0.6));
          background-size: 200% 100%; animation: flowPulse 2.4s linear infinite; }}
 .link::after {{ content: ""; position: absolute; right: -2px; top: -4px; border: 5px solid transparent;
-               border-left: 7px solid var(--violet); border-right: 0; }}
+               border-left: 7px solid var(--accent2); border-right: 0; }}
 @keyframes flowPulse {{ from {{ background-position: 200% 0; }} to {{ background-position: 0 0; }} }}
 /* Wraps to 3 + 2 on mid widths, a vertical chain on phones */
 @media (max-width: 1100px) and (min-width: 641px) {{
@@ -308,65 +320,100 @@ a {{ color: var(--cyan); }}
 @media (max-width: 640px) {{
   .flow {{ flex-direction: column; }}
   .link {{ flex: 0 0 var(--space-4); width: 2px; height: auto; align-self: center;
-           background: linear-gradient(180deg, rgba(0,229,255,0.2), var(--cyan), rgba(139,92,246,0.6)); }}
+           background: linear-gradient(180deg, rgba(198,244,50,0.2), var(--accent), rgba(94,234,212,0.6)); }}
   .link::after {{ right: -4px; top: auto; bottom: -2px; border: 5px solid transparent;
-                 border-top: 7px solid var(--violet); border-bottom: 0; }}
+                 border-top: 7px solid var(--accent2); border-bottom: 0; }}
 }}
 
 /* ── Sidebar ───────────────────────────────────────────────────────────── */
-[data-testid="stSidebar"] {{ background: rgba(7,10,24,0.72) !important; backdrop-filter: blur(14px);
-                            border-right: 1px solid var(--glass-border); }}
+[data-testid="stSidebar"] {{ background: linear-gradient(180deg, rgba(12,13,16,0.92), rgba(10,11,13,0.86)) !important;
+                            backdrop-filter: blur(14px); border-right: 1px solid var(--glass-border); }}
 [data-testid="stSidebarUserContent"] {{ padding-bottom: var(--space-4) !important;
                                        min-height: calc(100dvh - 76px); display: flex; flex-direction: column; }}
 [data-testid="stSidebarUserContent"] > div {{ flex: 1 1 auto; display: flex; flex-direction: column; }}
-[data-testid="stSidebarUserContent"] > div > [data-testid="stVerticalBlock"] {{ flex: 1 1 auto; gap: var(--space-4); }}
+[data-testid="stSidebarUserContent"] > div > [data-testid="stVerticalBlock"] {{ flex: 1 1 auto; gap: var(--space-2); }}
 [data-testid="stSidebar"] [data-testid="stElementContainer"]:has(.side-footer) {{ margin-top: auto; }}
-.side-brand {{ display: flex; align-items: center; gap: var(--space-3); }}
-.side-title {{ font-family: 'Orbitron', sans-serif; font-weight: 900; font-size: 1.12rem; line-height: 1.1;
-              background: linear-gradient(90deg, var(--ink), var(--cyan)); -webkit-background-clip: text;
-              background-clip: text; color: transparent; }}
+[data-testid="stSidebar"] [data-testid="stElementContainer"]:has(.side-label) {{ margin-top: var(--space-4); }}
+
+/* Brand */
+.side-brand {{ display: flex; align-items: center; gap: var(--space-3); padding-bottom: var(--space-4);
+              border-bottom: 1px solid var(--glass-border); }}
+.side-title {{ font-family: 'Inter', sans-serif; font-weight: 600; font-size: 1.05rem; line-height: 1.1;
+              letter-spacing: -0.02em; color: var(--ink); }}
 .side-tag {{ color: var(--muted); font-size: .75rem; margin-top: var(--space-1); }}
-.mini-orbit {{ position: relative; width: 38px; height: 38px; flex: 0 0 38px; }}
-.mini-orbit .core {{ position: absolute; inset: 11px; border-radius: 50%;
-                    background: radial-gradient(circle at 35% 30%, #9ff5ff, var(--cyan) 40%, #2b2a7a 100%);
-                    box-shadow: 0 0 12px rgba(0,229,255,0.6); }}
-.mini-orbit .ring {{ position: absolute; inset: 0; border-radius: 50%; border: 1px solid rgba(139,92,246,0.55);
+.mini-orbit {{ position: relative; width: 40px; height: 40px; flex: 0 0 40px; border-radius: var(--radius-sm);
+              background: rgba(198,244,50,0.06); border: 1px solid rgba(198,244,50,0.18); }}
+.mini-orbit .core {{ position: absolute; inset: 13px; border-radius: 50%;
+                    background: radial-gradient(circle at 35% 30%, #eaffb0, var(--accent) 40%, #1e2a12 100%); }}
+.mini-orbit .ring {{ position: absolute; inset: 6px; border-radius: 50%; border: 1px solid rgba(94,234,212,0.55);
                     animation: spin 6s linear infinite; }}
-.mini-orbit .ring::after {{ content: ""; position: absolute; top: -3px; left: 50%; width: 6px; height: 6px;
-                           border-radius: 50%; background: var(--amber); box-shadow: 0 0 8px var(--amber); }}
-.side-muted {{ color: var(--muted); font-size: .78rem; line-height: 1.7; padding-top: var(--space-4);
-              border-top: 1px solid var(--glass-border); }}
-.side-footer {{ padding-top: var(--space-3); border-top: 1px solid var(--glass-border);
-               font-family: 'Orbitron', sans-serif; font-size: .66rem; letter-spacing: .12em; color: var(--muted);
-               white-space: nowrap; }}
-[data-testid="stSidebar"] [role="radiogroup"] {{ gap: var(--space-2); width: 100%; }}
-[data-testid="stSidebar"] [role="radiogroup"] label {{
-  width: 100%; min-height: 44px; display: flex; align-items: center; padding: 0 var(--space-3); margin: 0;
-  border-radius: var(--radius-sm); border: 1px solid transparent; cursor: pointer; transition: all var(--t);
+.mini-orbit .ring::after {{ content: ""; position: absolute; top: -3px; left: 50%; width: 5px; height: 5px;
+                           border-radius: 50%; background: var(--ref); box-shadow: 0 0 6px var(--ref); }}
+
+/* Group labels */
+.side-label {{ font-size: .68rem; font-weight: 600; letter-spacing: .16em; text-transform: uppercase;
+              color: rgba(141,146,156,0.7); padding: 0 var(--space-3); }}
+
+/* Navigation: each option = icon + title + one-line caption */
+[data-testid="stSidebar"] [data-testid="stRadio"] {{ width: 100%; }}
+[data-testid="stSidebar"] [role="radiogroup"] {{ gap: var(--space-1); width: 100%; }}
+[data-testid="stSidebar"] [role="radiogroup"] > div {{
+  position: relative; width: 100%; padding: 10px var(--space-3); border-radius: var(--radius-sm);
+  border: 1px solid transparent; transition: background var(--t), border-color var(--t);
 }}
+[data-testid="stSidebar"] [role="radiogroup"] > div:hover {{ background: rgba(255,255,255,0.04); }}
+[data-testid="stSidebar"] [role="radiogroup"] > div:has(input:checked) {{
+  background: rgba(198,244,50,0.07); border-color: rgba(198,244,50,0.22);
+}}
+[data-testid="stSidebar"] [role="radiogroup"] > div:has(input:checked)::before {{
+  content: ""; position: absolute; left: -1px; top: 10px; bottom: 10px; width: 3px; border-radius: 0 3px 3px 0;
+  background: linear-gradient(180deg, var(--accent), var(--accent2));
+}}
+[data-testid="stSidebar"] [data-testid="stRadioOption"] {{ margin: 0; padding: 0; width: 100%; cursor: pointer; position: static; }}
+/* the whole row is clickable, caption included */
+[data-testid="stSidebar"] [data-testid="stRadioOption"]::after {{ content: ""; position: absolute; inset: 0; z-index: 1;
+                                                                  border-radius: inherit; }}
 [data-testid="stSidebar"] [data-testid="stRadioOption"] > div > div:first-child:not([data-testid]) {{ display: none; }}
-[data-testid="stSidebar"] [role="radiogroup"] label p {{ font-size: var(--fs-body); font-weight: 500; color: var(--muted);
-                                                        transition: color var(--t); }}
-[data-testid="stSidebar"] [role="radiogroup"] label:hover {{ background: rgba(255,255,255,0.04); }}
-[data-testid="stSidebar"] [role="radiogroup"] label:hover p {{ color: var(--ink); }}
-[data-testid="stSidebar"] [role="radiogroup"] label:has(input:checked) {{
-  background: linear-gradient(90deg, rgba(0,229,255,0.14), rgba(139,92,246,0.10));
-  border-color: rgba(0,229,255,0.35); box-shadow: 0 0 18px rgba(0,229,255,0.12), inset 3px 0 0 var(--cyan);
+[data-testid="stSidebar"] [data-testid="stRadioOption"] p {{
+  display: flex; align-items: center; gap: 10px; font-size: .92rem; font-weight: 500; color: var(--ink); opacity: .78;
+  transition: opacity var(--t);
 }}
-[data-testid="stSidebar"] [role="radiogroup"] label:has(input:checked) p {{ color: var(--ink); font-weight: 600; }}
+[data-testid="stSidebar"] [data-testid="stRadioOption"] [role="img"] {{ font-size: 1.15rem; color: var(--muted); transition: color var(--t); }}
+[data-testid="stSidebar"] [data-testid="stRadioCaption"] {{ padding-left: calc(1.15rem + 10px); margin-top: 2px; text-align: left; }}
+[data-testid="stSidebar"] [data-testid="stRadioCaption"] p {{ font-size: .74rem !important; color: var(--muted); opacity: .8;
+                                                             text-align: left; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }}
+[data-testid="stSidebar"] [role="radiogroup"] > div:hover [data-testid="stRadioOption"] p {{ opacity: 1; }}
+[data-testid="stSidebar"] [role="radiogroup"] > div:has(input:checked) [data-testid="stRadioOption"] p {{ opacity: 1; font-weight: 600; }}
+[data-testid="stSidebar"] [role="radiogroup"] > div:has(input:checked) [role="img"] {{ color: var(--accent); }}
+/* keyboard focus only (react-aria marks it with data-focus-visible) */
+[data-testid="stSidebar"] [role="radiogroup"] > div:has([data-focus-visible]) {{ outline: 2px solid rgba(198,244,50,0.5); outline-offset: 2px; }}
+
+/* Project facts */
+.side-meta {{ margin: 0; padding: var(--space-2) var(--space-3); border-radius: var(--radius-sm);
+             background: rgba(255,255,255,0.025); border: 1px solid var(--glass-border); }}
+.side-meta > div {{ display: flex; justify-content: space-between; gap: var(--space-3); padding: 7px 0;
+                   border-bottom: 1px solid rgba(255,255,255,0.05); font-size: .76rem; }}
+.side-meta > div:last-child {{ border-bottom: 0; }}
+.side-meta dt {{ color: var(--muted); font-weight: 400; }}
+.side-meta dd {{ margin: 0; color: var(--ink); font-weight: 500; text-align: right; white-space: nowrap; }}
+.side-meta > div:nth-child(3) dd {{ color: var(--accent); font-family: 'Inter', sans-serif; font-size: .74rem; }}
+
+/* Footer */
+.side-footer {{ display: flex; justify-content: space-between; align-items: center; padding: var(--space-3) var(--space-3) 0;
+               border-top: 1px solid var(--glass-border); font-size: .68rem; color: rgba(141,146,156,0.7); white-space: nowrap; }}
+.side-footer span:first-child {{ font-family: 'Inter', sans-serif; letter-spacing: .12em; text-transform: uppercase; }}
 
 /* ── Widgets ───────────────────────────────────────────────────────────── */
 .stButton > button {{
-  width: 100%; min-height: 44px; border-radius: var(--radius-sm); border: 1px solid rgba(0,229,255,0.35);
-  background: linear-gradient(135deg, rgba(0,229,255,0.16), rgba(139,92,246,0.22));
-  color: var(--ink); font-weight: 600; white-space: nowrap;
-  transition: transform var(--t), box-shadow var(--t), border-color var(--t);
+  width: 100%; min-height: 44px; border-radius: var(--radius-sm); border: 1px solid rgba(255,255,255,0.10);
+  background: rgba(255,255,255,0.04); color: var(--ink); font-weight: 500; white-space: nowrap;
+  transition: transform var(--t), background var(--t), border-color var(--t), color var(--t);
 }}
 .stButton > button p {{ overflow: hidden; text-overflow: ellipsis; }}
-.stButton > button:hover {{ transform: translateY(-2px); border-color: var(--cyan); color: #fff;
-                           box-shadow: 0 8px 22px rgba(0,229,255,0.22); }}
+.stButton > button:hover {{ transform: translateY(-1px); border-color: var(--accent); color: var(--accent);
+                           background: rgba(198,244,50,0.06); }}
 .stButton > button:active {{ transform: translateY(0); }}
-.stButton > button:focus:not(:active) {{ border-color: var(--cyan); color: var(--ink); }}
+.stButton > button:focus:not(:active) {{ border-color: var(--accent); color: var(--ink); }}
 .stButton > button:disabled {{ opacity: .45; transform: none; box-shadow: none; }}
 .st-key-preset_reset .stButton > button {{ background: rgba(255,255,255,0.03); border-color: var(--glass-border); }}
 
@@ -375,30 +422,29 @@ a {{ color: var(--cyan); }}
 [data-testid="stSlider"] [role="group"] > div > div:first-child {{ height: 6px; border-radius: 6px; anchor-name: --wi-track; }}
 [data-testid="stSlider"] [role="group"] > div > div:nth-child(2) {{
   anchor-name: --wi-thumb; z-index: 2; width: 18px; height: 18px;
-  background: #e6ecff !important; border: 2px solid var(--cyan);
-  box-shadow: 0 0 0 4px rgba(0,229,255,0.15), 0 0 14px rgba(0,229,255,0.7);
+  background: #f4f5f7 !important; border: 2px solid var(--accent);
+  box-shadow: 0 0 0 4px rgba(198,244,50,0.15);
 }}
 @supports (anchor-name: --a) {{
-  [data-testid="stSlider"] [role="group"] > div > div:first-child {{ background: rgba(126,146,215,0.22) !important; }}
+  [data-testid="stSlider"] [role="group"] > div > div:first-child {{ background: rgba(255,255,255,0.10) !important; }}
   [data-testid="stSlider"] [role="group"] > div::after {{
     content: ""; position: absolute; z-index: 1; pointer-events: none; border-radius: 6px;
     left: anchor(--wi-track left); top: anchor(--wi-track top); bottom: anchor(--wi-track bottom);
     right: anchor(--wi-thumb center);
-    background: linear-gradient(90deg, var(--cyan), var(--violet)); box-shadow: 0 0 10px rgba(0,229,255,0.45);
+    background: linear-gradient(90deg, var(--accent), var(--accent2));
   }}
 }}
-[data-testid="stSliderThumbValue"] {{ color: var(--cyan) !important; font-family: 'Orbitron', sans-serif; font-size: .78rem; }}
+[data-testid="stSliderThumbValue"] {{ color: var(--accent) !important; font-family: 'Inter', sans-serif; font-size: .78rem; }}
 [data-testid="stSliderTickBarMin"], [data-testid="stSliderTickBarMax"] {{ color: var(--muted); }}
 [data-testid="stSlider"] label p {{ font-weight: 600; color: var(--ink); }}
 /* Earth caption sits below the slider's min/max tick row (shown on hover), never on top of it */
 [data-testid="stElementContainer"]:has(.earth-ref) {{ margin-top: calc(-1 * var(--space-1)); }}
 .earth-ref {{ color: var(--muted); font-size: var(--fs-caption); }}
-.earth-ref b {{ color: var(--amber); font-weight: 600; }}
+.earth-ref b {{ color: var(--ref); font-weight: 600; }}
 
 [data-testid="stProgressBarTrack"] {{ background: rgba(255,255,255,0.07) !important; border-radius: var(--radius-pill); height: 10px; }}
 [data-testid="stProgressBarTrack"] > div {{
-  background: linear-gradient(90deg, var(--violet), var(--cyan)) !important; border-radius: var(--radius-pill);
-  box-shadow: 0 0 12px rgba(0,229,255,0.6);
+  background: linear-gradient(90deg, var(--accent2), var(--accent)) !important; border-radius: var(--radius-pill);
 }}
 [data-testid="stProgress"] p {{ color: var(--muted); font-size: var(--fs-caption); }}
 
@@ -407,13 +453,13 @@ a {{ color: var(--cyan); }}
   border-radius: var(--radius-sm); border-color: var(--glass-border) !important; background: rgba(255,255,255,0.04) !important;
   transition: border-color var(--t), box-shadow var(--t);
 }}
-[data-testid="stTextInput"] [data-baseweb="input"]:focus-within {{ border-color: var(--cyan) !important;
-                                                                  box-shadow: 0 0 0 3px rgba(0,229,255,0.15); }}
+[data-testid="stTextInput"] [data-baseweb="input"]:focus-within {{ border-color: var(--accent) !important;
+                                                                  box-shadow: 0 0 0 3px rgba(198,244,50,0.15); }}
 [data-testid="stTextInput"] label p, [data-testid="stFileUploader"] label p {{ color: var(--muted); font-size: var(--fs-caption); }}
 
 [data-testid="stTabs"] [role="tablist"] {{ gap: var(--space-2); border-bottom: 1px solid var(--glass-border); }}
 [data-testid="stTabs"] button[role="tab"] {{ color: var(--muted); padding: var(--space-2) var(--space-3); border-radius: 10px 10px 0 0; }}
-[data-testid="stTabs"] button[role="tab"][aria-selected="true"] {{ color: var(--cyan); background: rgba(0,229,255,0.06); }}
+[data-testid="stTabs"] button[role="tab"][aria-selected="true"] {{ color: var(--accent); background: rgba(198,244,50,0.06); }}
 
 [data-testid="stDataFrame"] {{ border: 1px solid var(--glass-border); border-radius: var(--radius); overflow: hidden;
                               background: var(--glass); }}
@@ -424,9 +470,9 @@ a {{ color: var(--cyan); }}
 [class*="st-key-card_fig"] [data-testid="stImage"] img {{ max-height: 340px; }}
 [data-testid="stImageCaption"], [data-testid="stCaptionContainer"] {{ color: var(--muted) !important; font-size: var(--fs-caption) !important;
                                                                    text-align: center; }}
-[data-testid="stFileUploaderDropzone"] {{ background: rgba(255,255,255,0.03) !important; border: 1px dashed rgba(0,229,255,0.35) !important;
+[data-testid="stFileUploaderDropzone"] {{ background: rgba(255,255,255,0.03) !important; border: 1px dashed rgba(198,244,50,0.35) !important;
                                           border-radius: var(--radius-sm); padding: var(--space-3) var(--space-4); }}
-[data-testid="stFileUploaderDropzone"] button {{ border-color: rgba(0,229,255,0.35); color: var(--ink); background: rgba(0,229,255,0.08); }}
+[data-testid="stFileUploaderDropzone"] button {{ border-color: rgba(198,244,50,0.35); color: var(--ink); background: rgba(198,244,50,0.08); }}
 [data-testid="stFileUploaderFile"] {{ color: var(--ink); }}
 [data-testid="stExpander"] details {{ background: var(--glass); border: 1px solid var(--glass-border) !important;
                                      border-radius: var(--radius-sm); transition: border-color var(--t); }}
@@ -437,7 +483,7 @@ a {{ color: var(--cyan); }}
 [data-testid="stAlert"] {{ background: rgba(255,92,122,0.08); border: 1px solid rgba(255,92,122,0.3); border-radius: var(--radius-sm); }}
 /* Help tooltips + popovers */
 [data-testid="stTooltipContent"], div[role="tooltip"] {{
-  background: #0b1026 !important; color: var(--ink) !important; border: 1px solid rgba(0,229,255,0.25);
+  background: #121418 !important; color: var(--ink) !important; border: 1px solid rgba(198,244,50,0.25);
   border-radius: var(--radius-sm); box-shadow: var(--glow); font-size: var(--fs-caption);
 }}
 .card-divider {{ height: 1px; background: var(--glass-border); }}
@@ -474,43 +520,42 @@ a {{ color: var(--cyan); }}
 .steps li {{ display: flex; gap: var(--space-3); align-items: flex-start; color: var(--muted); line-height: 1.5; }}
 .steps b {{ color: var(--ink); }}
 .step-no {{ flex: 0 0 28px; height: 28px; border-radius: 50%; display: grid; place-items: center;
-           font-family: 'Orbitron', sans-serif; font-size: .75rem; color: var(--cyan);
-           border: 1px solid rgba(0,229,255,0.4); background: rgba(0,229,255,0.08); }}
+           font-family: 'Inter', sans-serif; font-size: .75rem; color: var(--accent);
+           border: 1px solid rgba(198,244,50,0.4); background: rgba(198,244,50,0.08); }}
 
 /* ── Splash ────────────────────────────────────────────────────────────── */
 .splash {{ position: fixed; inset: 0; z-index: 1000000; display: flex; align-items: center; justify-content: center;
-           background: radial-gradient(ellipse at 50% 40%, rgba(139,92,246,0.25), transparent 60%),
-                       linear-gradient(160deg, #05070f 0%, #0b1026 55%, #150d2e 100%);
+           background: radial-gradient(ellipse at 50% 40%, rgba(94,234,212,0.25), transparent 60%),
+                       linear-gradient(160deg, #08090b 0%, #121418 55%, #0e1013 100%);
            overflow: hidden; }}
 .splash .starfield {{ position: absolute; z-index: 0; }}
 .splash-inner {{ position: relative; z-index: 1; text-align: center; padding: 0 16px; width: min(560px, 100%); }}
 .orbit-wrap {{ position: relative; width: 200px; height: 200px; margin: 0 auto 1.8rem auto; }}
 .planet {{ position: absolute; inset: 45px; border-radius: 50%;
            background: radial-gradient(circle at 32% 28%, rgba(255,255,255,0.55), transparent 32%),
-                       repeating-linear-gradient(170deg, #1b3a8f 0 10px, #2c5fd6 10px 18px, #00b8d4 18px 24px, #6d3fd8 24px 34px);
+                       repeating-linear-gradient(170deg, #1c2410 0 10px, #3d5212 10px 18px, #c6f432 18px 24px, #2a6b60 24px 34px);
            background-size: 100% 100%, 220px 220px;
-           box-shadow: inset -22px -16px 40px rgba(0,0,0,0.75), 0 0 40px rgba(0,229,255,0.45), 0 0 90px rgba(139,92,246,0.35);
+           box-shadow: inset -22px -16px 40px rgba(0,0,0,0.75), 0 0 40px rgba(198,244,50,0.45), 0 0 90px rgba(94,234,212,0.35);
            animation: planetSpin 9s linear infinite; }}
 @keyframes planetSpin {{ from {{ background-position: 0 0, 0 0; }} to {{ background-position: 0 0, 220px 0; }} }}
-.moon-orbit {{ position: absolute; inset: 0; border-radius: 50%; border: 1px dashed rgba(230,236,255,0.18);
+.moon-orbit {{ position: absolute; inset: 0; border-radius: 50%; border: 1px dashed rgba(244,245,247,0.18);
                animation: spin 4.5s linear infinite; }}
 .moon {{ position: absolute; top: -8px; left: calc(50% - 8px); width: 16px; height: 16px; border-radius: 50%;
-         background: radial-gradient(circle at 35% 30%, #fff, #c9cfe6 45%, #6b7394 100%); box-shadow: 0 0 14px rgba(255,181,71,0.7); }}
+         background: radial-gradient(circle at 35% 30%, #fff, #d6d9de 45%, #5d626b 100%); box-shadow: 0 0 14px rgba(255,138,91,0.7); }}
 @keyframes spin {{ to {{ transform: rotate(360deg); }} }}
-.splash-title {{ font-family: 'Orbitron', sans-serif; font-weight: 900; font-size: clamp(2.2rem, 8vw, 3.8rem); line-height: 1.05;
-                background: linear-gradient(90deg, var(--cyan), #e6ecff 50%, var(--violet)); -webkit-background-clip: text;
-                background-clip: text; color: transparent; filter: drop-shadow(0 0 24px rgba(0,229,255,0.45)); }}
+.splash-title {{ font-family: 'Inter', sans-serif; font-weight: 600; font-size: clamp(2.2rem, 8vw, 3.6rem); line-height: 1.05;
+                letter-spacing: -0.04em; color: var(--ink); }}
 .splash-sub {{ color: var(--muted); font-size: 1rem; margin: .7rem 0 1.8rem 0; }}
 .splash-bar {{ height: 6px; border-radius: 99px; background: rgba(255,255,255,0.08); overflow: hidden; width: min(380px, 100%); margin: 0 auto; }}
-.splash-fill {{ height: 100%; width: 0; border-radius: 99px; background: linear-gradient(90deg, var(--violet), var(--cyan));
-               box-shadow: 0 0 14px var(--cyan); animation: fill 3s cubic-bezier(.4,.1,.3,1) forwards; }}
+.splash-fill {{ height: 100%; width: 0; border-radius: 99px; background: linear-gradient(90deg, var(--accent2), var(--accent));
+               animation: fill 3s cubic-bezier(.4,.1,.3,1) forwards; }}
 @keyframes fill {{ to {{ width: 100%; }} }}
 .splash-status {{ position: relative; height: 1.6rem; margin-top: 1rem; color: var(--ink); font-size: .92rem; }}
 .splash-status span {{ position: absolute; left: 0; right: 0; opacity: 0; animation: statusLine .75s ease both; }}
 .splash-status span:nth-child(1) {{ animation-delay: 0s; }}
 .splash-status span:nth-child(2) {{ animation-delay: .75s; }}
 .splash-status span:nth-child(3) {{ animation-delay: 1.5s; }}
-.splash-status span:nth-child(4) {{ animation: statusLast .5s ease 2.25s both; color: var(--cyan); }}
+.splash-status span:nth-child(4) {{ animation: statusLast .5s ease 2.25s both; color: var(--accent); }}
 @keyframes statusLine {{ 0% {{ opacity: 0; transform: translateY(6px); }} 20%, 80% {{ opacity: 1; transform: none; }}
                          100% {{ opacity: 0; transform: translateY(-6px); }} }}
 @keyframes statusLast {{ from {{ opacity: 0; transform: translateY(6px); }} to {{ opacity: 1; transform: none; }} }}
@@ -641,7 +686,7 @@ def style_fig(fig: go.Figure, height: int) -> go.Figure:
         template="plotly_dark", height=height, margin=CHART_MARGIN,
         paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
         font=dict(color=INK_MUTED, size=12, family=FONT), showlegend=False,
-        hoverlabel=dict(bgcolor="#0b1026", bordercolor=CYAN, font_color=INK, font_family=FONT),
+        hoverlabel=dict(bgcolor="#121418", bordercolor=ACCENT, font_color=INK, font_family=FONT),
         bargap=0.35,
     )
     fig.update_xaxes(gridcolor=GRID, zeroline=False, linecolor=GRID)
@@ -711,19 +756,24 @@ def glass_table(rows: list[dict], columns: list[tuple[str, str, bool]], highligh
 
 
 # ── Sidebar navigation ────────────────────────────────────────────────────────
-PAGES = ["🛰️ Pipeline Overview", "🪐 Planet Explorer", "🧪 Design Your Planet", "🔭 Vision RAG"]
+PAGES = [":material/account_tree: Pipeline Overview", ":material/travel_explore: Planet Explorer",
+         ":material/tune: Design Your Planet", ":material/image_search: Vision RAG"]
+NAV_CAPTIONS = ["Raw data to ranked planets", "Search 5,456 scored planets",
+                "Build a world, get its score", "Ask about the project figures"]
+PROJECT_META = [("Data", "NASA archive · 2026"), ("Model", "XGBoost"), ("Test R²", "0.9500"),
+                ("Explainability", "SHAP"), ("Vision RAG", "Embed-4 + Gemini")]
 
 
 def sidebar() -> str:
     with st.sidebar:
         html('<div class="side-brand"><div class="mini-orbit"><div class="core"></div><div class="ring"></div></div>'
              '<div><div class="side-title">Beyond Binary</div>'
-             '<div class="side-tag">Life sustainability scores in exoplanets</div></div></div>')
-        page = st.radio("Navigation", PAGES, key="nav", label_visibility="collapsed")
-        html('<div class="side-muted">Data: NASA Exoplanet Archive (PSCompPars, Mar 2026)<br>'
-             'Best model: XGBoost · R² 0.9500<br>Watchlist: XGBoost<br>Explainability: SHAP<br>'
-             'Vision RAG: Cohere Embed-4 + Gemini</div>')
-        html('<div class="side-footer">BEYOND BINARY • ML PIPELINE</div>')
+             '<div class="side-tag">Exoplanet habitability · ML</div></div></div>')
+        html('<div class="side-label">Navigate</div>')
+        page = st.radio("Navigation", PAGES, captions=NAV_CAPTIONS, key="nav", label_visibility="collapsed")
+        html('<div class="side-label">Project</div><dl class="side-meta">' + "".join(
+            f'<div><dt>{k}</dt><dd>{v}</dd></div>' for k, v in PROJECT_META) + "</dl>")
+        html('<div class="side-footer"><span>Beyond Binary</span><span>v1.0</span></div>')
     return page
 
 
@@ -772,7 +822,7 @@ def page_overview():
         glass_table([{"c": n, "w": f"{w:.2f}", "m": d} for _, n, w, d in LSS_COMPONENTS],
                     [("c", "Component", False), ("w", "Weight", True), ("m", "What it measures", False)])
         fig = hbar([n for _, n, _, _ in LSS_COMPONENTS], [w for _, _, w, _ in LSS_COMPONENTS],
-                   [CYAN, VIOLET, AMBER, "#5b8cff", "#c084fc"], "{:.0%}",
+                   [ACCENT, ACCENT2, REF, "#9aa0aa", "#5d626b"], "{:.0%}",
                    "%{y}: weight %{x:.2f}<extra></extra>", BAR_H, [0, 0.42])
         fig.update_xaxes(tickformat=".0%")
         st.plotly_chart(fig, config=PLOTLY_CFG, key="lss_chart")
@@ -784,7 +834,7 @@ def page_overview():
                       "rmse": f"{r.RMSE:.4f}"} for _, r in comp_sorted.iterrows()],
                     [("model", "Model", False), ("r2", "R²", True), ("mae", "MAE", True), ("rmse", "RMSE", True)],
                     highlight=lambda r: r["model"] == best["Model"])
-        colors = [CYAN if m == best["Model"] else "rgba(139,92,246,0.55)" for m in comp_sorted["Model"]]
+        colors = [ACCENT if m == best["Model"] else "rgba(94,234,212,0.55)" for m in comp_sorted["Model"]]
         fig = hbar(comp_sorted["Model"].tolist(), comp_sorted["R² Score"].tolist(), colors,
                    "{:.4f}", "%{y}: R² %{x:.4f}<extra></extra>", BAR_H, [0, 1.08])
         st.plotly_chart(fig, config=PLOTLY_CFG, key="model_chart")
@@ -836,7 +886,7 @@ def percentile_chart(p: pd.Series, total: int) -> go.Figure:
     fig.add_bar(x=[100], y=[""], orientation="h", marker=dict(color=TRACK, cornerradius=6),
                 hoverinfo="skip")
     fig.add_bar(x=[pct], y=[""], orientation="h",
-                marker=dict(color=CYAN, cornerradius=6, line=dict(color=VIOLET, width=1)),
+                marker=dict(color=ACCENT, cornerradius=6, line=dict(color=ACCENT2, width=1)),
                 hovertemplate=f"{p['pl_name']}: %{{x:.2f}}th percentile<extra></extra>")
     fig = style_fig(fig, PCT_H)
     fig.update_layout(barmode="overlay", bargap=0.45, margin={**CHART_MARGIN, "t": 40})
@@ -844,14 +894,14 @@ def percentile_chart(p: pd.Series, total: int) -> go.Figure:
     fig.add_annotation(x=pct, y=0.5, yref="paper", yanchor="bottom", yshift=26,
                        text=f"<b>{pct:.1f}%</b>", showarrow=False, font=dict(color=INK, size=13))
     earth = earth_percentile(total)
-    fig.add_vline(x=earth, line=dict(color=AMBER, width=2, dash="dot"))
+    fig.add_vline(x=earth, line=dict(color=REF, width=2, dash="dot"))
     return fig
 
 
 def components_chart(p: pd.Series) -> go.Figure:
     names  = [n for _, n, _, _ in LSS_COMPONENTS]
     scores = [float(p[k]) for k, *_ in LSS_COMPONENTS]
-    return hbar(names, scores, CYAN, "{:.2f}", "%{y}: %{x:.3f}<extra></extra>", BAR_H, [0, 1.12])
+    return hbar(names, scores, ACCENT, "{:.2f}", "%{y}: %{x:.3f}<extra></extra>", BAR_H, [0, 1.12])
 
 
 def top20_table(wl: pd.DataFrame, planet: str | None):
@@ -870,7 +920,7 @@ def top20_table(wl: pd.DataFrame, planet: str | None):
 
     def highlight(row):
         on = row["Planet"] == planet
-        return ["background-color: rgba(0,229,255,0.16); color: #e6ecff; font-weight: 600" if on else ""] * len(row)
+        return ["background-color: rgba(198,244,50,0.16); color: #f4f5f7; font-weight: 600" if on else ""] * len(row)
 
     styled = (view.style.apply(highlight, axis=1)
               .format({"Actual LSS": "{:.4f}", "ML Predicted LSS": "{:.4f}", "Difference": "{:+.4f}"}))
@@ -928,7 +978,7 @@ def page_explorer():
     with st.container(key="card_pct"):
         card_head("📈", f"Percentile · {p['percentile']:.1f}",
                   f"Scores above {total - int(p['rank']):,} of {total - 1:,} other planets. "
-                  f"<span style='color:{AMBER}'>┆ Earth ({earth_percentile(total):.2f}%)</span>")
+                  f"<span style='color:{REF}'>┆ Earth ({earth_percentile(total):.2f}%)</span>")
         st.plotly_chart(percentile_chart(p, total), config=PLOTLY_CFG, key="pct_chart")
 
     left, right = st.columns(2, gap="medium")
@@ -993,19 +1043,19 @@ def fmt_value(k: str, v: float) -> str:
 def gauge_chart(lss: float) -> go.Figure:
     fig = go.Figure(go.Indicator(
         mode="gauge+number+delta", value=lss,
-        number=dict(valueformat=".4f", font=dict(family="Orbitron, sans-serif", size=36, color=INK)),
+        number=dict(valueformat=".4f", font=dict(family="Inter, sans-serif", size=36, color=INK)),
         delta=dict(reference=EARTH_LSS, valueformat="+.4f", suffix=" vs Earth",
                    increasing=dict(color=GREEN), decreasing=dict(color=RED), font=dict(size=15)),
         gauge=dict(
             axis=dict(range=[0, 1], tickvals=[0, 0.2, 0.4, 0.6, 0.8, 1], tickcolor=INK_MUTED,
                       tickfont=dict(color=INK_MUTED, size=11)),
-            bar=dict(color=CYAN, thickness=0.28),
+            bar=dict(color=ACCENT, thickness=0.28),
             bgcolor="rgba(255,255,255,0.03)", borderwidth=0,
             steps=[dict(range=[0, 0.4], color="rgba(255,92,122,0.35)"),
-                   dict(range=[0.4, 0.6], color="rgba(255,138,61,0.35)"),
-                   dict(range=[0.6, 0.8], color="rgba(255,210,63,0.30)"),
-                   dict(range=[0.8, 1.0], color="rgba(46,229,157,0.32)")],
-            threshold=dict(line=dict(color=AMBER, width=3), thickness=0.85, value=EARTH_LSS),
+                   dict(range=[0.4, 0.6], color="rgba(255,159,67,0.35)"),
+                   dict(range=[0.6, 0.8], color="rgba(255,212,59,0.30)"),
+                   dict(range=[0.8, 1.0], color="rgba(52,211,153,0.32)")],
+            threshold=dict(line=dict(color=REF, width=3), thickness=0.85, value=EARTH_LSS),
         ),
     ))
     fig.update_layout(template="plotly_dark", height=GAUGE_H, margin={**CHART_MARGIN, "t": 40},
@@ -1025,18 +1075,18 @@ def radar_chart(values: dict) -> go.Figure:
     fig.add_trace(go.Scatterpolar(
         r=yours + yours[:1], theta=labels + labels[:1], name="Your planet",
         customdata=yours_txt + yours_txt[:1],
-        line=dict(color=CYAN, width=2), fill="toself", fillcolor="rgba(0,229,255,0.20)",
-        marker=dict(size=7, color=CYAN, line=dict(color="#05070f", width=1.5)),
+        line=dict(color=ACCENT, width=2), fill="toself", fillcolor="rgba(198,244,50,0.20)",
+        marker=dict(size=7, color=ACCENT, line=dict(color="#08090b", width=1.5)),
         hovertemplate="Your planet · %{theta}: %{customdata}<extra></extra>"))
     fig.add_trace(go.Scatterpolar(
         r=earth + earth[:1], theta=labels + labels[:1], name="Earth",
         customdata=earth_txt + earth_txt[:1],
-        line=dict(color=AMBER, width=2, dash="dash"), fill="none", mode="lines",
+        line=dict(color=REF, width=2, dash="dash"), fill="none", mode="lines",
         hovertemplate="Earth · %{theta}: %{customdata}<extra></extra>"))
     fig.update_layout(
         template="plotly_dark", height=RADAR_H, margin=dict(l=64, r=64, t=40, b=64),  # room for axis labels
         paper_bgcolor="rgba(0,0,0,0)", font=dict(color=INK_MUTED, size=12, family=FONT),
-        hoverlabel=dict(bgcolor="#0b1026", bordercolor=CYAN, font_color=INK),
+        hoverlabel=dict(bgcolor="#121418", bordercolor=ACCENT, font_color=INK),
         legend=dict(orientation="h", yanchor="top", y=-0.1, xanchor="center", x=0.5,
                     font=dict(color=INK)),
         polar=dict(
@@ -1059,7 +1109,7 @@ def comparison_table(values: dict):
             arrow, color, delta = "≈", GREEN, f"{pct:+.1f}%"
         else:
             arrow = "▲" if pct > 0 else "▼"
-            color = GREEN if abs(pct) <= 15 else AMBER if abs(pct) <= 50 else RED
+            color = GREEN if abs(pct) <= 15 else REF if abs(pct) <= 50 else RED
             delta = f"{pct:+,.0f}%"
         rows.append({"f": FRIENDLY[k], "v": fmt_value(k, v), "e": fmt_value(k, e),
                      "d": f'<span class="delta" style="color:{color}">{arrow} {delta}</span>'})
@@ -1081,29 +1131,29 @@ def insights(v: dict) -> list[tuple[str, str]]:
         out.append((3, RED, f"A radius of {v['pl_rade']:.1f} R⊕ puts it in gas-giant territory — "
                             "no solid surface to live on."))
     elif v["pl_rade"] > 1.6:
-        out.append((2, AMBER, f"At {v['pl_rade']:.2f} R⊕ it is probably a gas-rich mini-Neptune rather "
+        out.append((2, REF, f"At {v['pl_rade']:.2f} R⊕ it is probably a gas-rich mini-Neptune rather "
                               "than a rocky world."))
     elif v["pl_rade"] < 0.7:
-        out.append((1, AMBER, f"At {v['pl_rade']:.2f} R⊕ it may be too small to hold on to a thick "
+        out.append((1, REF, f"At {v['pl_rade']:.2f} R⊕ it may be too small to hold on to a thick "
                               "atmosphere."))
     if v["pl_dens"] < 3:
-        out.append((2, AMBER, f"Density of {v['pl_dens']:.2f} g/cm³ is low for a rocky planet — "
+        out.append((2, REF, f"Density of {v['pl_dens']:.2f} g/cm³ is low for a rocky planet — "
                               "likely a thick gas or ice envelope."))
     if v["st_age"] < 1:
-        out.append((2, AMBER, f"Stellar age of {v['st_age']:.1f} Gyr may be too young for complex life "
+        out.append((2, REF, f"Stellar age of {v['st_age']:.1f} Gyr may be too young for complex life "
                               "to evolve."))
     elif v["st_age"] > 10:
-        out.append((1, AMBER, f"A {v['st_age']:.1f} Gyr-old star is nearing the end of its stable life."))
+        out.append((1, REF, f"A {v['st_age']:.1f} Gyr-old star is nearing the end of its stable life."))
     if v["pl_orbeccen"] > 0.3:
-        out.append((2, AMBER, f"Eccentricity of {v['pl_orbeccen']:.2f} means a very stretched orbit — "
+        out.append((2, REF, f"Eccentricity of {v['pl_orbeccen']:.2f} means a very stretched orbit — "
                               "extreme seasonal swings."))
     if v["st_teff"] < 3900:
-        out.append((1, AMBER, f"A {v['st_teff']:,.0f} K red dwarf host brings flares and likely "
+        out.append((1, REF, f"A {v['st_teff']:,.0f} K red dwarf host brings flares and likely "
                               "tidal locking."))
     elif v["st_teff"] > 7200:
-        out.append((1, AMBER, f"A {v['st_teff']:,.0f} K star is hot and short-lived, with strong UV."))
+        out.append((1, REF, f"A {v['st_teff']:,.0f} K star is hot and short-lived, with strong UV."))
     if v["st_mass"] > 1.5:
-        out.append((1, AMBER, f"A {v['st_mass']:.2f} M☉ star burns out quickly — little time for life."))
+        out.append((1, REF, f"A {v['st_mass']:.2f} M☉ star burns out quickly — little time for life."))
     if not out:
         out.append((0, GREEN, "Every parameter is within an Earth-like range — a promising setup."))
     out.sort(key=lambda t: -t[0])
@@ -1113,11 +1163,11 @@ def insights(v: dict) -> list[tuple[str, str]]:
 def hz_hint(eqt: float) -> str:
     lo, hi = LIQUID_WATER_K
     if lo <= eqt <= hi:
-        return (f'<div class="hz-hint" style="background:rgba(46,229,157,0.08);border:1px solid rgba(46,229,157,0.3)">'
+        return (f'<div class="hz-hint" style="background:rgba(52,211,153,0.08);border:1px solid rgba(52,211,153,0.3)">'
                 f'💧 <b>Habitable zone hint:</b> {eqt:,.0f} K sits inside the {lo}–{hi} K liquid-water range.</div>')
     off = eqt - hi if eqt > hi else lo - eqt
     side = "above" if eqt > hi else "below"
-    return (f'<div class="hz-hint" style="background:rgba(255,181,71,0.08);border:1px solid rgba(255,181,71,0.3)">'
+    return (f'<div class="hz-hint" style="background:rgba(255,138,91,0.08);border:1px solid rgba(255,138,91,0.3)">'
             f'💧 <b>Habitable zone hint:</b> {eqt:,.0f} K is {off:,.0f} K {side} the {lo}–{hi} K '
             f'liquid-water range.</div>')
 
@@ -1156,15 +1206,15 @@ def page_whatif():
             verdict, color = next((v, c) for t, v, c in VERDICTS if lss > t)
 
             card_head("🎯", "Predicted habitability", "XGBoost (R² 0.9500) on your 8 parameters · "
-                      f"<span style='color:{AMBER}'>┃ Earth {EARTH_LSS:.4f}</span>")
+                      f"<span style='color:{REF}'>┃ Earth {EARTH_LSS:.4f}</span>")
             st.plotly_chart(gauge_chart(lss), config=PLOTLY_CFG, key="gauge_chart")
             html(f'<div class="verdict" style="color:{color};background:{color}1f;border:1px solid {color}66;'
                  f'box-shadow:0 0 22px {color}33">{verdict}</div>')
             st.progress(lss, text=f"{lss:.0%} of the maximum score")
             html('<div class="card-divider"></div>')
             card_head("🕸️", "Planet profile", "Each feature scaled 0–1 across its slider range · "
-                      f"<span style='color:{CYAN}'>■ your planet</span> vs "
-                      f"<span style='color:{AMBER}'>┅ Earth</span>")
+                      f"<span style='color:{ACCENT}'>■ your planet</span> vs "
+                      f"<span style='color:{REF}'>┅ Earth</span>")
             st.plotly_chart(radar_chart(values), config=PLOTLY_CFG, key="radar_chart")
 
     section("Why this score?", "How your planet compares with Earth, plus rule-of-thumb notes.")
@@ -1246,7 +1296,7 @@ def rag_source_label(path: str) -> str:
 def similarity_chart(scores: np.ndarray, paths: list[str]) -> go.Figure:
     top = np.argsort(scores)[::-1][:5]
     labels = [rag_source_label(paths[i]) for i in top]
-    colors = [CYAN] + ["rgba(139,92,246,0.55)"] * (len(top) - 1)
+    colors = [ACCENT] + ["rgba(94,234,212,0.55)"] * (len(top) - 1)
     lo = float(scores[top].min())
     return hbar(labels, [float(scores[i]) for i in top], colors, "{:.3f}",
                 "%{y}: similarity %{x:.3f}<extra></extra>", BAR_H, [lo * 0.9, float(scores[top[0]]) * 1.08])

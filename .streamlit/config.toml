@@ -1,16 +1,16 @@
 [theme]
 base = "dark"
-primaryColor = "#00e5ff"
-backgroundColor = "#05070f"
-secondaryBackgroundColor = "#0b1026"
-textColor = "#e6ecff"
-borderColor = "#1d2547"
+primaryColor = "#c6f432"
+backgroundColor = "#08090b"
+secondaryBackgroundColor = "#121418"
+textColor = "#f4f5f7"
+borderColor = "#23262d"
 baseRadius = "0.75rem"
 font = "Inter:https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap, sans-serif"
 
 [theme.sidebar]
-backgroundColor = "#070a18"
-secondaryBackgroundColor = "#0b1026"
+backgroundColor = "#0a0b0d"
+secondaryBackgroundColor = "#121418"
 
 [client]
 toolbarMode = "minimal"
