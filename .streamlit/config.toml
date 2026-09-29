@@ -1,0 +1,19 @@
+[theme]
+base = "dark"
+primaryColor = "#3987e5"
+backgroundColor = "#09090b"
+secondaryBackgroundColor = "#18181b"
+textColor = "#fafafa"
+borderColor = "#27272a"
+baseRadius = "0.6rem"
+font = "Inter:https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap, sans-serif"
+
+[theme.sidebar]
+backgroundColor = "#0c0c0f"
+secondaryBackgroundColor = "#18181b"
+
+[client]
+toolbarMode = "minimal"
+
+[server]
+headless = true
