@@ -10,12 +10,14 @@ import os
 import random
 import re
 import time
+from urllib.parse import quote
 
 import joblib
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
+from PIL import Image, ImageDraw
 from sklearn.preprocessing import RobustScaler
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
@@ -25,6 +27,9 @@ COMPARISON_CSV = os.path.join(ROOT, "outputs/model_comparison_with_ensemble.csv"
 WATCHLIST_CSV  = os.path.join(ROOT, "outputs/full_planet_watchlist.csv")
 LEADERBOARD_PNG = os.path.join(ROOT, "outputs/step10_leaderboard.png")
 ACT_VS_PRED_PNG = os.path.join(ROOT, "outputs/step9_actual_vs_predicted.png")
+CV_RESULTS_CSV = os.path.join(ROOT, "outputs/cv_results.csv")
+CV_STABILITY_PNG = os.path.join(ROOT, "outputs/cv_r2_stability.png")
+LSS_PARTS_CSV  = os.path.join(ROOT, "EXTRAS/exoplanets_step7_with_lss.csv")
 X_TRAIN_CSV    = os.path.join(ROOT, "TRAIN_TEST/X_train.csv")
 XGB_MODEL      = os.path.join(ROOT, "model_xgboost.pkl")
 
@@ -100,7 +105,24 @@ BAR_H, PCT_H, GAUGE_H, RADAR_H = 240, 140, 260, 440
 
 
 # ── Page setup ────────────────────────────────────────────────────────────────
-st.set_page_config(page_title="Beyond Binary", page_icon="🪐", layout="wide")
+def _favicon() -> Image.Image:
+    """Tab icon in the app palette: lime planet, mint ring whose back half passes behind it."""
+    n, c = 256, 128
+    ring = Image.new("RGBA", (n, n))
+    ImageDraw.Draw(ring).ellipse((14, c - 30, n - 14, c + 30), outline=ACCENT2, width=14)
+    front = ring.copy()
+    ImageDraw.Draw(front).rectangle((0, 0, n, c), fill=(0, 0, 0, 0))
+    ring, front = ring.rotate(22, resample=Image.BICUBIC), front.rotate(22, resample=Image.BICUBIC)
+    planet = Image.new("RGBA", (n, n))
+    d = ImageDraw.Draw(planet)
+    d.ellipse((c - 70, c - 70, c + 70, c + 70), fill="#08090b")
+    d.ellipse((c - 62, c - 62, c + 62, c + 62), fill=ACCENT)
+    d.ellipse((c - 36, c - 48, c + 4, c - 16), fill="#e4fa94")          # soft highlight
+    img = Image.alpha_composite(Image.alpha_composite(ring, planet), front)
+    return img.resize((64, 64), Image.LANCZOS)
+
+
+st.set_page_config(page_title="Beyond Binary", page_icon=_favicon(), layout="wide")
 
 
 def _constellation_svg(seed: int, groups: int, dust: int) -> str:
@@ -131,6 +153,188 @@ def _constellation_svg(seed: int, groups: int, dust: int) -> str:
 STARFIELD_HTML = ('<div class="starfield"><div class="sky sky-a">' + _constellation_svg(7, 26, 0) + '</div>'
                   '<div class="sky sky-b">' + _constellation_svg(11, 0, 260) + '</div></div>')
 
+# Line icons from Lucide (lucide.dev, ISC licence): inner SVG markup on a 24×24 grid, stroked in currentColor
+ICONS = {
+    "database": '<ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5V19A9 3 0 0 0 21 19V5"/><path d="M3 12A9 3 0 0 0 21 12"/>',
+    "funnel": '<path d="M10 20a1 1 0 0 0 .553.895l2 1A1 1 0 0 0 14 21v-7a2 2 0 0 1 .517-1.341L21.74 4.67A1 1 0 0 0 21 3H3a1 1 0 0 0-.742 1.67l7.225 7.989A2 2 0 0 1 10 14z"/>',
+    "thermometer": '<path d="M14 4v10.54a4 4 0 1 1-4 0V4a2 2 0 0 1 4 0Z"/>',
+    "brain-circuit": '<path d="M12 5a3 3 0 1 0-5.997.125 4 4 0 0 0-2.526 5.77 4 4 0 0 0 .556 6.588A4 4 0 1 0 12 18Z"/><path d="M9 13a4.5 4.5 0 0 0 3-4"/><path d="M6.003 5.125A3 3 0 0 0 6.401 6.5"/><path d="M3.477 10.896a4 4 0 0 1 .585-.396"/><path d="M6 18a4 4 0 0 1-1.967-.516"/><path d="M12 13h4"/><path d="M12 18h6a2 2 0 0 1 2 2v1"/><path d="M12 8h8"/><path d="M16 8V5a2 2 0 0 1 2-2"/><circle cx="16" cy="13" r=".5"/><circle cx="18" cy="3" r=".5"/><circle cx="20" cy="21" r=".5"/><circle cx="20" cy="8" r=".5"/>',
+    "trophy": '<path d="M10 14.66V17a1 1 0 0 1-1 1 2 2 0 0 0-2 2v2"/><path d="M14 14.66V17a1 1 0 0 0 1 1 2 2 0 0 1 2 2v2"/><path d="M17.916 10H19.5A2.5 2.5 0 0 0 22 7.5V5a1 1 0 0 0-1-1h-3"/><path d="M4 22h16"/><path d="M6 9a6 6 0 0 0 12 0V3a1 1 0 0 0-1-1H7a1 1 0 0 0-1 1z"/><path d="M6.084 10H4.5A2.5 2.5 0 0 1 2 7.5V5a1 1 0 0 1 1-1h3"/>',
+    "target": '<circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/>',
+    "flask-conical": '<path d="M14 2v6a2 2 0 0 0 .245.96l5.51 10.08A2 2 0 0 1 18 22H6a2 2 0 0 1-1.755-2.96l5.51-10.08A2 2 0 0 0 10 8V2"/><path d="M6.453 15h11.094"/><path d="M8.5 2h7"/>',
+    "chart-spline": '<path d="M3 3v16a2 2 0 0 0 2 2h16"/><path d="M7 16c.5-2 1.5-7 4-7 2 0 2 3 4 3 2.5 0 4.5-5 5-7"/>',
+    "sliders-horizontal": '<path d="M10 5H3"/><path d="M12 19H3"/><path d="M14 3v4"/><path d="M16 17v4"/><path d="M21 12h-9"/><path d="M21 19h-5"/><path d="M21 5h-7"/><path d="M8 10v4"/><path d="M8 12H3"/>',
+    "satellite": '<path d="m13.5 6.5-3.148-3.148a1.205 1.205 0 0 0-1.704 0L6.352 5.648a1.205 1.205 0 0 0 0 1.704L9.5 10.5"/><path d="M16.5 7.5 19 5"/><path d="m17.5 10.5 3.148 3.148a1.205 1.205 0 0 1 0 1.704l-2.296 2.296a1.205 1.205 0 0 1-1.704 0L13.5 14.5"/><path d="M9 21a6 6 0 0 0-6-6"/><path d="M9.352 10.648a1.205 1.205 0 0 0 0 1.704l2.296 2.296a1.205 1.205 0 0 0 1.704 0l4.296-4.296a1.205 1.205 0 0 0 0-1.704l-2.296-2.296a1.205 1.205 0 0 0-1.704 0z"/>',
+    "orbit": '<path d="M20.341 6.484A10 10 0 0 1 10.266 21.85"/><path d="M3.659 17.516A10 10 0 0 1 13.74 2.152"/><circle cx="12" cy="12" r="3"/><circle cx="19" cy="5" r="2"/><circle cx="5" cy="19" r="2"/>',
+    "puzzle": '<path d="M15.39 4.39a1 1 0 0 0 1.68-.474 2.5 2.5 0 1 1 3.014 3.015 1 1 0 0 0-.474 1.68l1.683 1.682a2.414 2.414 0 0 1 0 3.414L19.61 15.39a1 1 0 0 1-1.68-.474 2.5 2.5 0 1 0-3.014 3.015 1 1 0 0 1 .474 1.68l-1.683 1.682a2.414 2.414 0 0 1-3.414 0L8.61 19.61a1 1 0 0 0-1.68.474 2.5 2.5 0 1 1-3.014-3.015 1 1 0 0 0 .474-1.68l-1.683-1.682a2.414 2.414 0 0 1 0-3.414L4.39 8.61a1 1 0 0 1 1.68.474 2.5 2.5 0 1 0 3.014-3.015 1 1 0 0 1-.474-1.68l1.683-1.682a2.414 2.414 0 0 1 3.414 0z"/>',
+    "telescope": '<path d="m10.065 12.493-6.18 1.318a.934.934 0 0 1-1.108-.702l-.537-2.15a1.07 1.07 0 0 1 .691-1.265l13.504-4.44"/><path d="m13.56 11.747 4.332-.924"/><path d="m16 21-3.105-6.21"/><path d="M16.485 5.94a2 2 0 0 1 1.455-2.425l1.09-.272a1 1 0 0 1 1.212.727l1.515 6.06a1 1 0 0 1-.727 1.213l-1.09.272a2 2 0 0 1-2.425-1.455z"/><path d="m6.158 8.633 1.114 4.456"/><path d="m8 21 3.105-6.21"/><circle cx="12" cy="13" r="2"/>',
+    "route": '<circle cx="6" cy="19" r="3"/><path d="M9 19h8.5a3.5 3.5 0 0 0 0-7h-11a3.5 3.5 0 0 1 0-7H15"/><circle cx="18" cy="5" r="3"/>',
+    "sun": '<circle cx="12" cy="12" r="4"/><path d="M12 2v2"/><path d="M12 20v2"/><path d="m4.93 4.93 1.41 1.41"/><path d="m17.66 17.66 1.41 1.41"/><path d="M2 12h2"/><path d="M20 12h2"/><path d="m6.34 17.66-1.41 1.41"/><path d="m19.07 4.93-1.41 1.41"/>',
+    "radar": '<path d="M19.07 4.93A10 10 0 0 0 6.99 3.34"/><path d="M4 6h.01"/><path d="M2.29 9.62A10 10 0 1 0 21.31 8.35"/><path d="M16.24 7.76A6 6 0 1 0 8.23 16.67"/><path d="M12 18h.01"/><path d="M17.99 11.66A6 6 0 0 1 15.77 16.67"/><circle cx="12" cy="12" r="2"/><path d="m13.41 10.59 5.66-5.66"/>',
+    "lightbulb": '<path d="M15 14c.2-1 .7-1.7 1.5-2.5 1-.9 1.5-2.2 1.5-3.5A6 6 0 0 0 6 8c0 1 .2 2.2 1.5 3.5.7.7 1.3 1.5 1.5 2.5"/><path d="M9 18h6"/><path d="M10 22h4"/>',
+    "scale": '<path d="M12 3v18"/><path d="m19 8 3 8a5 5 0 0 1-6 0zV7"/><path d="M3 7h1a17 17 0 0 0 8-2 17 17 0 0 0 8 2h1"/><path d="m5 8 3 8a5 5 0 0 1-6 0zV7"/><path d="M7 21h10"/>',
+    "key-round": '<path d="M2.586 17.414A2 2 0 0 0 2 18.828V21a1 1 0 0 0 1 1h3a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h1a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h.172a2 2 0 0 0 1.414-.586l.814-.814a6.5 6.5 0 1 0-4-4z"/><circle cx="16.5" cy="7.5" r=".5" fill="currentColor"/>',
+    "image": '<rect width="18" height="18" x="3" y="3" rx="2" ry="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21"/>',
+    "chart-column": '<path d="M3 3v16a2 2 0 0 0 2 2h16"/><path d="M18 17V9"/><path d="M13 17V5"/><path d="M8 17v-3"/>',
+    "sparkles": '<path d="M11.017 2.814a1 1 0 0 1 1.966 0l1.051 5.558a2 2 0 0 0 1.594 1.594l5.558 1.051a1 1 0 0 1 0 1.966l-5.558 1.051a2 2 0 0 0-1.594 1.594l-1.051 5.558a1 1 0 0 1-1.966 0l-1.051-5.558a2 2 0 0 0-1.594-1.594l-5.558-1.051a1 1 0 0 1 0-1.966l5.558-1.051a2 2 0 0 0 1.594-1.594z"/><path d="M20 2v4"/><path d="M22 4h-4"/><circle cx="4" cy="20" r="2"/>',
+    "droplet": '<path d="M12 22a7 7 0 0 0 7-7c0-2-1-3.9-3-5.5s-3.5-4-4-6.5c-.5 2.5-2 4.9-4 6.5C6 11.1 5 13 5 15a7 7 0 0 0 7 7z"/>',
+    "earth": '<path d="M21.54 15H17a2 2 0 0 0-2 2v4.54"/><path d="M7 3.34V5a3 3 0 0 0 3 3a2 2 0 0 1 2 2c0 1.1.9 2 2 2a2 2 0 0 0 2-2c0-1.1.9-2 2-2h3.17"/><path d="M11 21.95V18a2 2 0 0 0-2-2a2 2 0 0 1-2-2v-1a2 2 0 0 0-2-2H2.05"/><circle cx="12" cy="12" r="10"/>',
+    "rocket": '<path d="M12 15v5s3.03-.55 4-2c1.08-1.62 0-5 0-5"/><path d="M4.5 16.5c-1.5 1.26-2 5-2 5s3.74-.5 5-2c.71-.84.7-2.13-.09-2.91a2.18 2.18 0 0 0-2.91-.09"/><path d="M9 12a22 22 0 0 1 2-3.95A12.88 12.88 0 0 1 22 2c0 2.72-.78 7.5-6 11a22.4 22.4 0 0 1-4 2z"/><path d="M9 12H4s.55-3.03 2-4c1.62-1.08 5 .05 5 .05"/>',
+    "info": '<circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/>',
+}
+
+
+def icon(name: str, cls: str = "ic") -> str:
+    return f'<svg class="{cls}" viewBox="0 0 24 24" aria-hidden="true">{ICONS[name]}</svg>'
+
+
+# Cursor: a small lime planet with a mint orbit (the splash planet); clickable things add a moon
+def _cursor(svg: str, fallback: str) -> str:
+    return f'url("data:image/svg+xml,{quote(svg)}") 16 16, {fallback}'
+
+
+_ORBIT = "rx='11' ry='4.5' transform='rotate(-25 16 16)' fill='none'"
+CURSOR_DEFAULT = _cursor(
+    "<svg xmlns='http://www.w3.org/2000/svg' width='32' height='32' viewBox='0 0 32 32'>"
+    f"<ellipse cx='16' cy='16' {_ORBIT} stroke='#08090b' stroke-opacity='.55' stroke-width='3'/>"
+    f"<ellipse cx='16' cy='16' {_ORBIT} stroke='{ACCENT2}' stroke-opacity='.85' stroke-width='1.2'/>"
+    f"<circle cx='16' cy='16' r='4' fill='{ACCENT}' stroke='#08090b' stroke-width='1.5'/></svg>", "auto")
+CURSOR_POINTER = _cursor(
+    "<svg xmlns='http://www.w3.org/2000/svg' width='32' height='32' viewBox='0 0 32 32'>"
+    f"<ellipse cx='16' cy='16' {_ORBIT} stroke='#08090b' stroke-opacity='.55' stroke-width='3.4'/>"
+    f"<ellipse cx='16' cy='16' {_ORBIT} stroke='{ACCENT}' stroke-width='1.6'/>"
+    f"<circle cx='16' cy='16' r='5.5' fill='{ACCENT}' stroke='#08090b' stroke-width='1.5'/>"
+    f"<circle cx='25.5' cy='11.4' r='2.4' fill='{ACCENT2}' stroke='#08090b' stroke-width='1'/></svg>", "pointer")
+
+
+# Animated cursor: a shaded planet at the pointer, a tilted orbit trailing behind it with a moon that
+# passes behind the planet; grows + turns lime over clickable things, pings on click. Canvas, so it
+# stays crisp and cheap. The static SVG cursors above remain the fallback if this never runs.
+CURSOR_JS = """
+<div class="bbc-boot"></div>
+<script>
+(() => {
+  if (window.__bbCursor || !matchMedia("(pointer: fine)").matches) return;
+  window.__bbCursor = true;
+  const LIME = "__ACCENT__", MINT = "__ACCENT2__", MUTED = "__MUTED__";
+  const still = matchMedia("(prefers-reduced-motion: reduce)").matches;
+  const SIZE = 132, HALF = SIZE / 2, dpr = Math.min(devicePixelRatio || 1, 2);
+  const cv = document.createElement("canvas");
+  cv.id = "bb-cursor"; cv.setAttribute("aria-hidden", "true");
+  cv.width = cv.height = SIZE * dpr;
+  Object.assign(cv.style, { position: "fixed", left: 0, top: 0, width: SIZE + "px", height: SIZE + "px",
+    pointerEvents: "none", zIndex: 2147483647, opacity: 0, transition: "opacity .18s ease", willChange: "transform" });
+  document.body.appendChild(cv);
+  const g = cv.getContext("2d"); g.scale(dpr, dpr);
+
+  const CLICK = 'a,button,summary,select,label,[role="button"],[role="radio"],[role="tab"],[role="option"],' +
+    '[role="slider"],[role="switch"],[role="checkbox"],[data-baseweb="select"],[data-testid="stFileUploaderDropzone"],' +
+    '[data-testid="stRadioOption"]';
+  const TEXT = 'input:not([type="radio"]):not([type="checkbox"]):not([type="range"]),textarea,[contenteditable="true"]';
+  const m = { x: -99, y: -99 }, o = { x: -99, y: -99 };        // pointer, lagging orbit centre
+  let hover = 0, hoverT = 0, off = 0, offT = 0, press = 0, visible = false, t0 = performance.now();
+  let spin = 0, tilt = -0.35, tiltT = -0.35, pings = [], last = t0;
+  const mix = (a, b, k) => a + (b - a) * k;
+  const hex = h => [1, 3, 5].map(i => parseInt(h.slice(i, i + 2), 16));
+  const [L, M, U] = [LIME, MINT, MUTED].map(hex);
+  const rgba = (c, a) => `rgba(${c[0]},${c[1]},${c[2]},${a})`;
+  const blend = (a, b, k) => a.map((v, i) => Math.round(mix(v, b[i], k)));
+
+  const show = on => { if (on !== visible) { visible = on; cv.style.opacity = on ? 1 : 0; } };
+  document.documentElement.classList.add("bbc-on");
+
+  addEventListener("mousemove", e => {
+    if (m.x < -50) { o.x = e.clientX; o.y = e.clientY; }
+    tiltT = -0.35 + Math.max(-0.35, Math.min(0.35, (e.clientX - m.x) * 0.02));
+    m.x = e.clientX; m.y = e.clientY;
+    const el = e.target instanceof Element ? e.target : null;
+    const text = el && el.closest(TEXT) && !el.closest('[data-baseweb="select"]');
+    const frame = el && el.tagName === "IFRAME";
+    show(!text && !frame);
+    const click = el && el.closest(CLICK);
+    offT = click && (click.matches(":disabled,[aria-disabled='true']") || click.closest("[aria-disabled='true']")) ? 1 : 0;
+    hoverT = click && !offT ? 1 : 0;
+  }, { passive: true });
+  document.addEventListener("mouseleave", () => show(false));
+  addEventListener("blur", () => show(false));
+  addEventListener("mousedown", () => {
+    press = 1;
+    if (!still) pings.push({ x: m.x, y: m.y, t: performance.now(), r: 14 + 8 * hover });
+  });
+  addEventListener("mouseup", () => { press = 0; });
+
+  function orbit(r, back, color, width, dash) {
+    g.save(); g.rotate(tilt); g.scale(1, 0.36);
+    g.beginPath(); g.ellipse(0, 0, r, r, 0, back ? Math.PI : 0, back ? 2 * Math.PI : Math.PI);
+    g.restore();
+    g.setLineDash(dash); g.lineDashOffset = -spin * 6;
+    g.strokeStyle = color; g.lineWidth = width; g.stroke(); g.setLineDash([]);
+  }
+  function moon(r, a, size, color) {
+    const x = Math.cos(a) * r, y = Math.sin(a) * r * 0.36;
+    const c = Math.cos(tilt), s = Math.sin(tilt);
+    g.beginPath(); g.arc(x * c - y * s, x * s + y * c, size, 0, 2 * Math.PI);
+    g.fillStyle = color; g.fill();
+    g.lineWidth = 1; g.strokeStyle = "rgba(8,9,11,.8)"; g.stroke();
+  }
+
+  function frame(now) {
+    const dt = Math.min(0.05, (now - last) / 1000); last = now;
+    const k = still ? 1 : 1 - Math.pow(0.0008, dt);           // frame-rate independent easing
+    const f = still ? 1 : 1 - Math.pow(0.00002, dt);          // orbit trails the planet, settles in ~0.25 s
+    o.x = mix(o.x, m.x, f); o.y = mix(o.y, m.y, f);
+    hover = mix(hover, hoverT, k); off = mix(off, offT, k); tilt = mix(tilt, tiltT, 1 - Math.pow(0.05, dt));
+    tiltT = mix(tiltT, -0.35, 1 - Math.pow(0.1, dt));
+    spin += dt * (still ? 0 : mix(1.5, 4.2, hover) * (1 - off));
+
+    g.clearRect(0, 0, SIZE, SIZE);
+    const lag = Math.hypot(o.x - m.x, o.y - m.y), cap = lag > 10 ? 10 / lag : 1;   // never drifts off the planet
+    const ox = (o.x - m.x) * cap, oy = (o.y - m.y) * cap;
+    const R = mix(15, 21, hover) * (1 - 0.18 * press);
+    const ring = blend(blend(M, L, hover), U, off);
+    const planetR = mix(4.2, 5.4, hover) * (1 - 0.25 * press);
+    const moonA = spin, moonFront = Math.sin(moonA) > 0;
+    const moonSize = mix(1.9, 2.4, hover) * (moonFront ? 1 : 0.8);
+    const moonCol = moonFront ? rgba(blend(M, U, off), 1) : rgba(blend(M, U, off), 0.45);
+
+    g.save(); g.translate(HALF + ox, HALF + oy);
+    orbit(R, true, rgba(ring, mix(0.35, 0.55, hover)), 1.2, hover > 0.5 ? [] : [2.5, 3]);
+    if (!moonFront) moon(R, moonA, moonSize, moonCol);
+    g.restore();
+
+    // planet: dark halo for contrast on light figures, then a lit sphere
+    g.save(); g.translate(HALF, HALF);
+    g.beginPath(); g.arc(0, 0, planetR + 1.6, 0, 2 * Math.PI); g.fillStyle = "rgba(8,9,11,.75)"; g.fill();
+    const body = blend(L, U, off);
+    const grd = g.createRadialGradient(-planetR * 0.4, -planetR * 0.45, planetR * 0.1, 0, 0, planetR);
+    grd.addColorStop(0, rgba(blend(body, [255, 255, 255], 0.55), 1));
+    grd.addColorStop(0.55, rgba(body, 1));
+    grd.addColorStop(1, rgba(blend(body, [8, 9, 11], 0.55), 1));
+    g.beginPath(); g.arc(0, 0, planetR, 0, 2 * Math.PI); g.fillStyle = grd; g.fill();
+    g.restore();
+
+    g.save(); g.translate(HALF + ox, HALF + oy);
+    orbit(R, false, rgba(ring, mix(0.8, 1, hover)), mix(1.2, 1.6, hover), hover > 0.5 ? [] : [2.5, 3]);
+    if (moonFront) moon(R, moonA, moonSize, moonCol);
+    g.restore();
+
+    // click pings: tilted ellipses expanding from where the click happened
+    pings = pings.filter(p => now - p.t < 520);
+    for (const p of pings) {
+      const q = (now - p.t) / 520, e = 1 - Math.pow(1 - q, 3);
+      g.save(); g.translate(HALF + p.x - m.x, HALF + p.y - m.y); g.rotate(tilt); g.scale(1, 0.36);
+      g.beginPath(); g.arc(0, 0, p.r + e * 34, 0, 2 * Math.PI); g.restore();
+      g.strokeStyle = rgba(L, 0.9 * (1 - q)); g.lineWidth = 1.5; g.stroke();
+    }
+    cv.style.transform = `translate3d(${m.x - HALF}px, ${m.y - HALF}px, 0)`;
+    requestAnimationFrame(frame);
+  }
+  requestAnimationFrame(frame);
+})();
+</script>
+""".replace("__ACCENT__", ACCENT).replace("__ACCENT2__", ACCENT2).replace("__MUTED__", INK_MUTED)
+
+
 CSS = f"""
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
 
@@ -149,7 +353,21 @@ CSS = f"""
   --fs-caption: .8125rem;                      /* caption       */
   --fs-kpi: 1.75rem;
   --t: 200ms ease;
+  --cur: {CURSOR_DEFAULT};
+  --cur-pointer: {CURSOR_POINTER};
 }}
+
+/* ── Themed cursor ─────────────────────────────────────────────────────── */
+html, body, .stApp, .stApp *, .stApp .js-plotly-plot .plotly [class*="cursor-"] {{ cursor: var(--cur); }}
+.stApp :is(a, button, summary, select, [role="button"], [role="radio"], [role="tab"], [role="option"],
+           [role="slider"], [role="switch"], [role="checkbox"], [data-baseweb="select"] *, [data-testid="stFileUploaderDropzone"] *,
+           label:has(input[type="radio"], input[type="checkbox"])),
+.stApp :is(a, button, [role="button"], [role="tab"]) * {{ cursor: var(--cur-pointer); }}
+.stApp :is(input:not([type="radio"], [type="checkbox"], [type="range"]), textarea, [contenteditable="true"]) {{ cursor: text; }}
+.stApp :is(:disabled, [aria-disabled="true"]), .stApp :is(:disabled, [aria-disabled="true"]) * {{ cursor: not-allowed !important; }}
+/* Animated canvas cursor (CURSOR_JS) replaces the native one; text fields keep their caret */
+html.bbc-on, html.bbc-on * {{ cursor: none !important; }}
+html.bbc-on :is(input:not([type="radio"], [type="checkbox"], [type="range"]), textarea, [contenteditable="true"]):not([data-baseweb="select"] *) {{ cursor: text !important; }}
 
 /* ── Background: graphite + revolving constellations ──────────────────── */
 .stApp {{
@@ -176,6 +394,7 @@ CSS = f"""
 /* Invisible helper elements (CSS, starfield, markers) take no layout space */
 [data-testid="stElementContainer"]:has(.starfield),
 [data-testid="stElementContainer"]:has(.boot-fade),
+[data-testid="stElementContainer"]:has(.bbc-boot),
 [data-testid="stElementContainer"]:has(style) {{ position: absolute; width: 0; height: 0; overflow: visible; }}
 
 /* ── Chrome + page frame ───────────────────────────────────────────────── */
@@ -221,7 +440,22 @@ h1, h2, h3 {{ font-family: 'Inter', sans-serif !important; letter-spacing: -0.02
                         border-radius: 2px; background: linear-gradient(90deg, var(--accent), var(--accent2)); }}
 .section-sub {{ color: var(--muted); font-size: var(--fs-caption); margin-top: var(--space-2); }}
 .grp-head {{ display: flex; align-items: center; gap: var(--space-2); }}
-.grp-icon {{ font-size: 1.2rem; line-height: 1; width: 1.4rem; text-align: center; }}
+/* Line icons (ICONS): lime strokes on a faint lime tile, same language as the pills */
+.ic {{ width: 1em; height: 1em; flex: none; fill: none; stroke: currentColor; stroke-width: 1.75;
+      stroke-linecap: round; stroke-linejoin: round; vertical-align: -0.14em; }}
+.grp-icon, .node-icon {{ display: inline-grid; place-items: center; flex: none; color: var(--accent);
+  background: linear-gradient(145deg, rgba(198,244,50,0.14), rgba(94,234,212,0.05));
+  border: 1px solid rgba(198,244,50,0.22); box-shadow: inset 0 1px 0 rgba(255,255,255,0.06); }}
+.grp-icon {{ width: 28px; height: 28px; border-radius: 8px; font-size: 16px; }}
+.hero-eyebrow .ic {{ font-size: 1.15em; margin-right: .35em; vertical-align: -0.2em; }}
+.splash-status .ic {{ color: var(--accent); margin-left: .25em; }}
+.earth-ref .ic {{ color: var(--ref); margin-right: .2em; }}
+.hz-hint .ic {{ margin-right: .2em; }}
+.verdict-dot {{ display: inline-block; width: .6em; height: .6em; border-radius: 50%; background: currentColor;
+               box-shadow: 0 0 0 3px color-mix(in srgb, currentColor 22%, transparent); margin-right: .6em;
+               vertical-align: .08em; }}
+/* Material icons on buttons / expanders follow the accent */
+.stApp :is([data-testid="stBaseButton-secondary"], [data-testid="stExpander"] summary) [data-testid="stIconMaterial"] {{ color: var(--accent); }}
 .grp-title {{ font-family: 'Inter', sans-serif; font-weight: 600; letter-spacing: -0.01em; font-size: var(--fs-card); color: var(--ink); }}
 .grp-cap {{ color: var(--muted); font-size: var(--fs-caption); margin-top: var(--space-1); }}
 
@@ -299,7 +533,7 @@ h1, h2, h3 {{ font-family: 'Inter', sans-serif !important; letter-spacing: -0.02
          }}
 .node::before {{ content: ""; position: absolute; top: -1px; left: 20%; right: 20%; height: 2px; border-radius: 2px;
                  background: linear-gradient(90deg, transparent, var(--accent), transparent); opacity: .8; }}
-.node-icon {{ font-size: 1.5rem; line-height: 1; margin-bottom: var(--space-1); }}
+.node-icon {{ width: 40px; height: 40px; border-radius: 11px; font-size: 20px; margin-bottom: var(--space-1); }}
 .node-idx {{ font-family: 'Inter', sans-serif; font-size: .66rem; color: var(--accent); letter-spacing: .18em; }}
 .node-title {{ font-weight: 600; color: var(--ink); font-size: var(--fs-body); }}
 .node-val {{ font-family: 'Inter', sans-serif; font-weight: 700; font-size: 1.05rem; margin: var(--space-1) 0;
@@ -369,7 +603,7 @@ h1, h2, h3 {{ font-family: 'Inter', sans-serif !important; letter-spacing: -0.02
   content: ""; position: absolute; left: -1px; top: 10px; bottom: 10px; width: 3px; border-radius: 0 3px 3px 0;
   background: linear-gradient(180deg, var(--accent), var(--accent2));
 }}
-[data-testid="stSidebar"] [data-testid="stRadioOption"] {{ margin: 0; padding: 0; width: 100%; cursor: pointer; position: static; }}
+[data-testid="stSidebar"] [data-testid="stRadioOption"] {{ margin: 0; padding: 0; width: 100%; cursor: var(--cur-pointer); position: static; }}
 /* the whole row is clickable, caption included */
 [data-testid="stSidebar"] [data-testid="stRadioOption"]::after {{ content: ""; position: absolute; inset: 0; z-index: 1;
                                                                   border-radius: inherit; }}
@@ -570,6 +804,7 @@ def html(markup: str):
 def inject_css():
     st.markdown(f"<style>{CSS}</style>", unsafe_allow_html=True)
     st.markdown(STARFIELD_HTML, unsafe_allow_html=True)
+    st.html(CURSOR_JS, unsafe_allow_javascript=True)
 
 
 # ── Data ──────────────────────────────────────────────────────────────────────
@@ -600,6 +835,48 @@ def require_watchlist() -> pd.DataFrame:
 def load_comparison() -> pd.DataFrame:
     df = pd.read_csv(COMPARISON_CSV).rename(columns={"Unnamed: 0": "Model"})
     return df
+
+
+@st.cache_data
+def load_cv_summary() -> pd.DataFrame | None:
+    """Per-model R² summary of the 5-fold CV written by cv_analysis.py."""
+    if not os.path.exists(CV_RESULTS_CSV):
+        return None
+    cv = pd.read_csv(CV_RESULTS_CSV)
+    return cv.groupby("Model", sort=False)["R2"].agg(["mean", "std", "min", "max"]).reset_index()
+
+
+SENS_DELTAS = [-0.15, -0.10, -0.05, 0.0, 0.05, 0.10, 0.15]
+
+
+@st.cache_data
+def load_sensitivity() -> dict | None:
+    """Notebook Step 14: scale each LSS weight by ±5/10/15%, renormalize, and re-rank every planet.
+
+    Recomputed from the saved Step 7 sub-scores so the dashboard needs no extra output file.
+    """
+    if not os.path.exists(LSS_PARTS_CSV):
+        return None
+    df = pd.read_csv(LSS_PARTS_CSV)
+    base = {key: w for key, _, w, _ in LSS_COMPONENTS}
+    top5 = df["LSS"].nlargest(5).index
+    kepler = df.index[df["pl_name"] == "Kepler-442 b"][0]
+    overlap = np.zeros((len(base), len(SENS_DELTAS)), dtype=int)
+    kepler_rank = np.zeros_like(overlap)
+    swaps = {}
+    for i, comp in enumerate(base):
+        for j, delta in enumerate(SENS_DELTAS):
+            w = dict(base, **{comp: base[comp] * (1 + delta)})
+            total = sum(w.values())
+            lss = sum(w[k] / total * df[k] for k in w).clip(0, 1)
+            new_top5 = lss.nlargest(5).index
+            overlap[i, j] = len(top5.intersection(new_top5))
+            kepler_rank[i, j] = int(lss.rank(ascending=False)[kepler])
+            if overlap[i, j] < 5:
+                swaps[(i, j)] = (df.loc[top5.difference(new_top5), "pl_name"].tolist(),
+                                 df.loc[new_top5.difference(top5), "pl_name"].tolist())
+    return {"overlap": overlap, "kepler_rank": kepler_rank, "swaps": swaps,
+            "top5": df.loc[top5, ["pl_name", "hostname", "LSS"]].reset_index(drop=True)}
 
 
 @st.cache_data
@@ -651,7 +928,7 @@ SPLASH_HTML = f"""
     <div class="splash-bar"><div class="splash-fill"></div></div>
     <div class="splash-status">
       <span>Calibrating telescopes…</span><span>Loading 5,456 planets…</span>
-      <span>Waking up XGBoost…</span><span>Ready for launch 🚀</span>
+      <span>Waking up XGBoost…</span><span>Ready for launch {icon("rocket")}</span>
     </div>
   </div>
 </div>
@@ -738,9 +1015,9 @@ def notice(title: str, desc: str, kind: str = "", center: bool = False):
          f'<div class="notice-desc">{desc}</div></div>')
 
 
-def card_head(icon: str, title: str, sub: str = ""):
+def card_head(icon_name: str, title: str, sub: str = ""):
     """Title row used at the top of every glass card."""
-    html(f'<div><div class="grp-head"><span class="grp-icon">{icon}</span><span class="grp-title">{title}</span></div>'
+    html(f'<div><div class="grp-head"><span class="grp-icon">{icon(icon_name)}</span><span class="grp-title">{title}</span></div>'
          + (f'<div class="grp-cap">{sub}</div>' if sub else "") + "</div>")
 
 
@@ -785,7 +1062,7 @@ def page_overview():
     best = comp.loc[comp["R² Score"].idxmax()]
     wl = require_watchlist()
 
-    hero("🛰️ ML Pipeline", "Beyond Binary",
+    hero(icon("satellite") + " ML Pipeline", "Beyond Binary",
          "From the raw NASA archive to a ranked list of potentially habitable worlds: an 8-step "
          "preprocessing pipeline, a physics-informed habitability target, and gradient-boosted "
          "models explained with SHAP.")
@@ -801,15 +1078,15 @@ def page_overview():
     # Pipeline flow as connected stage nodes
     section("Pipeline", "Each stage writes a checkpoint the next stage reads.")
     stages = [
-        ("🗄️", "01", "Raw Data",      f"{raw_planet_count():,} × 54", "NASA composite parameters"),
-        ("🧹", "02", "Preprocessing", "8 steps",  "Impute · filter · log · VIF"),
-        ("🌡️", "03", "LSS Target",    "5 parts",  "Weighted habitability, 0–1"),
-        ("🤖", "04", "ML Models",     "5 models", "Ridge · RF · XGB · MLP · Vote"),
-        ("🏆", "05", "Rankings",      f"{len(wl):,}", "Every planet scored by XGBoost"),
+        ("database", "01", "Raw Data",      f"{raw_planet_count():,} × 54", "NASA composite parameters"),
+        ("funnel", "02", "Preprocessing", "8 steps",  "Impute · filter · log · VIF"),
+        ("thermometer", "03", "LSS Target",    "5 parts",  "Weighted habitability, 0–1"),
+        ("brain-circuit", "04", "ML Models",     "5 models", "Ridge · RF · XGB · MLP · Vote"),
+        ("trophy", "05", "Rankings",      f"{len(wl):,}", "Every planet scored by XGBoost"),
     ]
-    nodes = [f'<div class="glass node"><div class="node-icon">{icon}</div><div class="node-idx">STAGE {idx}</div>'
+    nodes = [f'<div class="glass node"><div class="node-icon">{icon(name)}</div><div class="node-idx">STAGE {idx}</div>'
              f'<div class="node-title">{title}</div><div class="node-val">{val}</div>'
-             f'<div class="node-desc">{desc}</div></div>' for icon, idx, title, val, desc in stages]
+             f'<div class="node-desc">{desc}</div></div>' for name, idx, title, val, desc in stages]
     html('<div class="flow">' + '<div class="link"></div>'.join(nodes) + "</div>")
 
     # LSS components + model comparison: formula strip, then two equal cards (table + chart each)
@@ -818,7 +1095,7 @@ def page_overview():
     html('<div class="glass formula">LSS = 0.35·HZ + 0.25·Temp + 0.20·Retention + 0.10·Orbit + 0.10·Stellar</div>')
     left, right = st.columns([1.25, 1], gap="medium")   # the LSS table has a text column
     with left, st.container(key="card_lss"):
-        card_head("🌡️", "LSS components", "Weight of each sub-score in the final LSS.")
+        card_head("thermometer", "LSS components", "Weight of each sub-score in the final LSS.")
         glass_table([{"c": n, "w": f"{w:.2f}", "m": d} for _, n, w, d in LSS_COMPONENTS],
                     [("c", "Component", False), ("w", "Weight", True), ("m", "What it measures", False)])
         fig = hbar([n for _, n, _, _ in LSS_COMPONENTS], [w for _, _, w, _ in LSS_COMPONENTS],
@@ -828,7 +1105,7 @@ def page_overview():
         st.plotly_chart(fig, config=PLOTLY_CFG, key="lss_chart")
 
     with right, st.container(key="card_models"):
-        card_head("🤖", "Model comparison", "Held-out test set · 1,092 planets · best model highlighted.")
+        card_head("brain-circuit", "Model comparison", "Held-out test set · 1,092 planets · best model highlighted.")
         comp_sorted = comp.sort_values("R² Score", ascending=False)
         glass_table([{"model": r.Model, "r2": f"{r['R² Score']:.4f}", "mae": f"{r.MAE:.4f}",
                       "rmse": f"{r.RMSE:.4f}"} for _, r in comp_sorted.iterrows()],
@@ -841,16 +1118,128 @@ def page_overview():
 
     # Figures from the notebook: a row of two equal cards
     section("Evaluation figures", "Generated in notebook Steps 9 and 10.")
-    figures = [("card_fig_lb", "🏆", "Model R² leaderboard", LEADERBOARD_PNG, "Step 10 · R² of every model on the test set"),
-               ("card_fig_avp", "🎯", "Actual vs predicted", ACT_VS_PRED_PNG, "Step 9 · predicted vs actual LSS, test set")]
+    figures = [("card_fig_lb", "trophy", "Model R² leaderboard", LEADERBOARD_PNG, "Step 10 · R² of every model on the test set"),
+               ("card_fig_avp", "target", "Actual vs predicted", ACT_VS_PRED_PNG, "Step 9 · predicted vs actual LSS, test set")]
     # Column widths follow the images' aspect ratios (2.0 vs 1.2) so both render at the same height
-    for col, (key, icon, title, path, caption) in zip(st.columns([1.7, 1], gap="medium"), figures):
+    for col, (key, icon_name, title, path, caption) in zip(st.columns([1.7, 1], gap="medium"), figures):
         with col, st.container(key=key):
-            card_head(icon, title)
+            card_head(icon_name, title)
             if os.path.exists(path):
                 st.image(load_image(path), caption=caption)
             else:
                 notice("Figure not found", f"{os.path.relpath(path, ROOT)} is missing — re-run the notebook.", "warn")
+
+    validation_section()
+    sensitivity_section()
+
+
+def validation_section():
+    # 5-fold CV complements the single 80/20 split used for the table above
+    section("Model validation", "5-fold cross-validation · scaler refit inside every training fold.")
+    cv = load_cv_summary()
+    if cv is None:
+        notice("Cross-validation results not found",
+               "Run <code>python cv_analysis.py</code> to generate outputs/cv_results.csv, then refresh this page.",
+               "warn")
+        return
+    xgb = cv.set_index("Model").loc["XGBoost"]
+    left, right = st.columns([1.3, 1], gap="medium")
+    with left, st.container(key="card_cv"):
+        card_head("flask-conical", "Cross-validated R²", "Across 5 folds · best mean highlighted.")
+        best_cv = cv.loc[cv["mean"].idxmax(), "Model"]
+        glass_table([{"model": r.Model, "mean": f"{r['mean']:.4f}", "std": f"{r['std']:.4f}",
+                      "min": f"{r['min']:.4f}", "max": f"{r['max']:.4f}"} for _, r in cv.iterrows()],
+                    [("model", "Model", False), ("mean", "Mean R²", True), ("std", "Std", True),
+                     ("min", "Min", True), ("max", "Max", True)],
+                    highlight=lambda r: r["model"] == best_cv)
+        notice("Stable across partitions",
+               f"5-fold cross-validation confirms XGBoost achieves stable "
+               f"R²={xgb['mean']:.4f}±{xgb['std']:.4f} across all data partitions.")
+    with right, st.container(key="card_fig_cv"):
+        card_head("chart-spline", "R² stability")
+        if os.path.exists(CV_STABILITY_PNG):
+            st.image(load_image(CV_STABILITY_PNG), caption="Each dot is one fold; the line marks the mean")
+        else:
+            notice("Figure not found", "outputs/cv_r2_stability.png is missing — run cv_analysis.py.", "warn")
+
+
+SENS_SHORT = {"hz_score": "Hab. zone", "temp_score": "Temperature", "retention_score": "Retention",
+              "orbit_score": "Orbit", "stellar_score": "Stellar"}
+
+
+def sensitivity_chart(sens: dict) -> go.Figure:
+    """5 weights × 7 changes; each cell is how many of the baseline top 5 survive (out of 5)."""
+    keys = [k for k, *_ in LSS_COMPONENTS]
+    names = [SENS_SHORT[k] for k in keys]
+    full = [n for _, n, _, _ in LSS_COMPONENTS]
+    cols = [f"{d:+.0%}" if d else "0%" for d in SENS_DELTAS]
+    ov, kr = sens["overlap"], sens["kepler_rank"]
+    hover = []
+    for i in range(len(names)):
+        row = []
+        for j in range(len(cols)):
+            text = f"<b>{full[i]} weight {cols[j]}</b><br>Top 5 kept: {ov[i, j]}/5<br>Kepler-442 b: #{kr[i, j]}"
+            if (i, j) in sens["swaps"]:
+                out, new = sens["swaps"][(i, j)]
+                text += f"<br>Out: {', '.join(out)}<br>In: {', '.join(new)}"
+            row.append(text)
+        hover.append(row)
+    # Unchanged cells stay quiet so the exceptions stand out: 5 dim lime, 4 amber, fewer coral
+    scale = [[0, REF], [0.7, REF], [0.7, YELLOW], [0.9, YELLOW],
+             [0.9, "rgba(198,244,50,0.16)"], [1, "rgba(198,244,50,0.16)"]]
+    fig = go.Figure(go.Heatmap(
+        z=ov, x=cols, y=names, zmin=0, zmax=5, colorscale=scale, showscale=False,
+        customdata=hover, hovertemplate="%{customdata}<extra></extra>", xgap=3, ygap=3,
+    ))
+    for i in range(len(names)):
+        for j in range(len(cols)):
+            v = int(ov[i, j])
+            fig.add_annotation(x=cols[j], y=names[i], text=str(v), showarrow=False,
+                               font=dict(size=13, family=FONT, color=ACCENT if v == 5 else "#08090b"))
+    fig = style_fig(fig, 300)
+    fig.update_xaxes(side="top", tickfont_color=INK, gridcolor="rgba(0,0,0,0)", linecolor="rgba(0,0,0,0)",
+                     fixedrange=True)
+    fig.update_yaxes(autorange="reversed", fixedrange=True, linecolor="rgba(0,0,0,0)")
+    return fig
+
+
+def sensitivity_section():
+    section("Ranking robustness", "Is the ranking an artifact of the chosen LSS weights? Each weight was "
+            "scaled by ±5, 10 and 15%, renormalized, and every planet re-ranked (notebook Step 14).")
+    sens = load_sensitivity()
+    if sens is None:
+        notice("Sensitivity data not found",
+               f"{os.path.relpath(LSS_PARTS_CSV, ROOT)} is missing — re-run notebook Step 7.", "warn")
+        return
+    ov, kr = sens["overlap"], sens["kepler_rank"]
+    n = ov.size
+    kept = int((ov == 5).sum())
+    kepler_first = int((kr == 1).sum())
+    if sens["swaps"]:
+        (i, j), (out, new) = min(sens["swaps"].items(), key=lambda kv: ov[kv[0]])
+        worst = (f"Worst case: {LSS_COMPONENTS[i][1]} {SENS_DELTAS[j]:+.0%} swaps "
+                 f"{', '.join(out)} for {', '.join(new)}")
+    else:
+        worst = "No scenario changes the top 5"
+    kpis([("Scenarios tested", str(n), f"{len(LSS_COMPONENTS)} weights × {len(SENS_DELTAS)} changes"),
+          ("Top 5 unchanged", f"{kept}/{n}", worst),
+          ("Kepler-442 b ranked #1", f"{kepler_first}/{n}", "Top planet in every scenario" if kepler_first == n
+           else f"Lowest rank #{kr.max()}")])
+
+    left, right = st.columns([1.6, 1], gap="medium")
+    with left, st.container(key="card_sens"):
+        card_head("sliders-horizontal", "Top-5 planets kept, per scenario",
+                  "Rows: which weight changed · columns: by how much · 5 = identical top 5 · hover for details.")
+        st.plotly_chart(sensitivity_chart(sens), config=PLOTLY_CFG, key="sens_chart")
+    with right, st.container(key="card_sens_top5"):
+        card_head("trophy", "Baseline top 5", "Ranked by LSS with the published weights.")
+        glass_table([{"rank": f"#{i + 1}", "planet": r.pl_name, "lss": f"{r.LSS:.4f}"}
+                     for i, r in sens["top5"].iterrows()],
+                    [("rank", "Rank", False), ("planet", "Planet", False), ("lss", "LSS", True)],
+                    highlight=lambda r: r["planet"] == "Kepler-442 b")
+        notice("Weights don't drive the result",
+               f"The same five planets lead in {kept} of {n} scenarios, and Kepler-442 b stays #1 in "
+               f"{kepler_first} of {n}.")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -936,7 +1325,7 @@ def page_explorer():
     wl = require_watchlist()
     total = len(wl)
 
-    hero("🪐 Planet Explorer", "Find any planet",
+    hero(icon("orbit") + " Planet Explorer", "Find any planet",
          f"Search {total:,} confirmed exoplanets. See where each one ranks by ML-predicted "
          "Life Sustainability Score (XGBoost) next to its actual LSS.")
 
@@ -976,17 +1365,17 @@ def page_explorer():
           ("Actual LSS", f"{p['actual_lss']:.4f}", f"Earth = {EARTH_LSS:.4f}")])
 
     with st.container(key="card_pct"):
-        card_head("📈", f"Percentile · {p['percentile']:.1f}",
+        card_head("chart-spline", f"Percentile · {p['percentile']:.1f}",
                   f"Scores above {total - int(p['rank']):,} of {total - 1:,} other planets. "
                   f"<span style='color:{REF}'>┆ Earth ({earth_percentile(total):.2f}%)</span>")
         st.plotly_chart(percentile_chart(p, total), config=PLOTLY_CFG, key="pct_chart")
 
     left, right = st.columns(2, gap="medium")
     with left, st.container(key="card_breakdown"):
-        card_head("🧩", "LSS breakdown", "Component sub-scores (0–1) that make up the LSS.")
+        card_head("puzzle", "LSS breakdown", "Component sub-scores (0–1) that make up the LSS.")
         st.plotly_chart(components_chart(p), config=PLOTLY_CFG, key="comp_chart")
     with right, st.container(key="card_phys"):
-        card_head("🔭", "Physical parameters", "Measured values from the NASA archive.")
+        card_head("telescope", "Physical parameters", "Measured values from the NASA archive.")
         glass_table(
             [{"p": "Planet radius", "v": f"{p['pl_rade']:.2f} R⊕"},
              {"p": "Equilibrium temperature", "v": f"{p['pl_eqt']:.0f} K"},
@@ -1007,23 +1396,23 @@ def page_explorer():
 # ══════════════════════════════════════════════════════════════════════════════
 VERDICTS = [
     # threshold (LSS > t), label, accent colour
-    (0.80, "🟢 Highly Promising Candidate",       GREEN),
-    (0.60, "🟡 Moderate Habitability Potential",  YELLOW),
-    (0.40, "🟠 Low Habitability Potential",       ORANGE),
-    (-1.0, "🔴 Not Habitable",                    RED),
+    (0.80, "Highly Promising Candidate",       GREEN),
+    (0.60, "Moderate Habitability Potential",  YELLOW),
+    (0.40, "Low Habitability Potential",       ORANGE),
+    (-1.0, "Not Habitable",                    RED),
 ]
 SLIDER_GROUPS = [
-    ("card_planet", "🪐", "The Planet", "Size and bulk — is it rocky like Earth?", ["pl_rade", "pl_dens"]),
-    ("card_orbit",  "🛤️", "The Orbit", "Where it travels and how much heat it gets",
+    ("card_planet", "orbit", "The Planet", "Size and bulk — is it rocky like Earth?", ["pl_rade", "pl_dens"]),
+    ("card_orbit",  "route", "The Orbit", "Where it travels and how much heat it gets",
      ["pl_orbsmax", "pl_orbeccen", "pl_eqt"]),
-    ("card_star",   "⭐", "The Star", "The sun it circles", ["st_teff", "st_mass", "st_age"]),
+    ("card_star",   "sun", "The Star", "The sun it circles", ["st_teff", "st_mass", "st_age"]),
 ]
 PRESETS = [
-    ("preset_earth",  "🌍 Earth",        EARTH_PRESET),
-    ("preset_k442",   "🪐 Kepler-442b",  KEPLER442B_PRESET),
-    ("preset_mars",   "🔴 Mars-like",    MARS_PRESET),
-    ("preset_hotjup", "🔥 Hot Jupiter",  HOT_JUPITER_PRESET),
-    ("preset_reset",  "↺ Reset",         DEFAULT_PRESET),
+    ("preset_earth",  "Earth",       ":material/public:",                EARTH_PRESET),
+    ("preset_k442",   "Kepler-442b", ":material/orbit:",                 KEPLER442B_PRESET),
+    ("preset_mars",   "Mars-like",   ":material/brightness_1:",          MARS_PRESET),
+    ("preset_hotjup", "Hot Jupiter", ":material/local_fire_department:", HOT_JUPITER_PRESET),
+    ("preset_reset",  "Reset",       ":material/restart_alt:",           DEFAULT_PRESET),
 ]
 LIQUID_WATER_K = (200, 330)
 
@@ -1164,11 +1553,11 @@ def hz_hint(eqt: float) -> str:
     lo, hi = LIQUID_WATER_K
     if lo <= eqt <= hi:
         return (f'<div class="hz-hint" style="background:rgba(52,211,153,0.08);border:1px solid rgba(52,211,153,0.3)">'
-                f'💧 <b>Habitable zone hint:</b> {eqt:,.0f} K sits inside the {lo}–{hi} K liquid-water range.</div>')
+                f'{icon("droplet")} <b>Habitable zone hint:</b> {eqt:,.0f} K sits inside the {lo}–{hi} K liquid-water range.</div>')
     off = eqt - hi if eqt > hi else lo - eqt
     side = "above" if eqt > hi else "below"
     return (f'<div class="hz-hint" style="background:rgba(255,138,91,0.08);border:1px solid rgba(255,138,91,0.3)">'
-            f'💧 <b>Habitable zone hint:</b> {eqt:,.0f} K is {off:,.0f} K {side} the {lo}–{hi} K '
+            f'{icon("droplet")} <b>Habitable zone hint:</b> {eqt:,.0f} K is {off:,.0f} K {side} the {lo}–{hi} K '
             f'liquid-water range.</div>')
 
 
@@ -1176,25 +1565,25 @@ def page_whatif():
     for k, *_, default, _step, _fmt in WHATIF_SLIDERS:
         st.session_state.setdefault(f"wi_{k}", default)
 
-    hero("🧪 Design Your Planet", "Design Your Planet", "Tweak the knobs, watch habitability change.")
+    hero(icon("flask-conical") + " Design Your Planet", "Design Your Planet", "Tweak the knobs, watch habitability change.")
 
     with st.container(key="presets"):
-        for col, (key, label, preset) in zip(st.columns(len(PRESETS), gap="small"), PRESETS):
+        for col, (key, label, btn_icon, preset) in zip(st.columns(len(PRESETS), gap="small"), PRESETS):
             with col:
-                st.button(label, key=key, on_click=apply_preset, args=(preset,), width="stretch")
+                st.button(label, key=key, icon=btn_icon, on_click=apply_preset, args=(preset,), width="stretch")
 
     values = {}
     with st.container(key="whatif_main"):
         left, right = st.columns(2, gap="medium")
         with left:
-            for gkey, icon, title, caption, keys in SLIDER_GROUPS:
+            for gkey, icon_name, title, caption, keys in SLIDER_GROUPS:
                 with st.container(key=gkey):
-                    card_head(icon, title, caption)
+                    card_head(icon_name, title, caption)
                     for k in keys:
                         _, label, unit, lo, hi, _default, step, fmt = SLIDER[k]
                         values[k] = st.slider(f"{label} ({unit})" if unit else label, min_value=lo, max_value=hi,
                                               step=step, format=fmt, key=f"wi_{k}", help=HELP[k])
-                        html(f'<div class="earth-ref">🌍 Earth = <b>{fmt_value(k, EARTH_PRESET[k])}</b></div>')
+                        html(f'<div class="earth-ref">{icon("earth")} Earth = <b>{fmt_value(k, EARTH_PRESET[k])}</b></div>')
 
         with right, st.container(key="card_results"):
             try:
@@ -1205,26 +1594,26 @@ def page_whatif():
                 return
             verdict, color = next((v, c) for t, v, c in VERDICTS if lss > t)
 
-            card_head("🎯", "Predicted habitability", "XGBoost (R² 0.9500) on your 8 parameters · "
+            card_head("target", "Predicted habitability", "XGBoost (R² 0.9500) on your 8 parameters · "
                       f"<span style='color:{REF}'>┃ Earth {EARTH_LSS:.4f}</span>")
             st.plotly_chart(gauge_chart(lss), config=PLOTLY_CFG, key="gauge_chart")
             html(f'<div class="verdict" style="color:{color};background:{color}1f;border:1px solid {color}66;'
-                 f'box-shadow:0 0 22px {color}33">{verdict}</div>')
+                 f'box-shadow:0 0 22px {color}33"><span class="verdict-dot"></span>{verdict}</div>')
             st.progress(lss, text=f"{lss:.0%} of the maximum score")
             html('<div class="card-divider"></div>')
-            card_head("🕸️", "Planet profile", "Each feature scaled 0–1 across its slider range · "
+            card_head("radar", "Planet profile", "Each feature scaled 0–1 across its slider range · "
                       f"<span style='color:{ACCENT}'>■ your planet</span> vs "
                       f"<span style='color:{REF}'>┅ Earth</span>")
             st.plotly_chart(radar_chart(values), config=PLOTLY_CFG, key="radar_chart")
 
     section("Why this score?", "How your planet compares with Earth, plus rule-of-thumb notes.")
     with st.container(key="card_why"):
-        card_head("💡", "What stands out", "Simple threshold rules, not the model.")
+        card_head("lightbulb", "What stands out", "Simple threshold rules, not the model.")
         html('<div class="insights">' + "".join(
             f'<div class="insight"><span class="dot" style="background:{c};box-shadow:0 0 8px {c}"></span>'
             f'<span>{t}</span></div>' for c, t in insights(values)) + hz_hint(values["pl_eqt"]) + "</div>")
         html('<div class="card-divider"></div>')
-        card_head("⚖️", "Your planet vs Earth", "Arrow colour shows how far each value strays.")
+        card_head("scale", "Your planet vs Earth", "Arrow colour shows how far each value strays.")
         comparison_table(values)
 
 
@@ -1309,7 +1698,7 @@ def page_vision_rag():
     st.session_state.setdefault("rag_cohere_key", os.environ.get("COHERE_API_KEY", ""))
     st.session_state.setdefault("rag_google_key", os.environ.get("GOOGLE_API_KEY", ""))
 
-    hero("🔭 Vision RAG", "Ask your figures",
+    hero(icon("telescope") + " Vision RAG", "Ask your figures",
          "Retrieve the most relevant chart or PDF page with Cohere Embed-4, then let Gemini 2.5 Flash "
          "answer your question from it.")
     pills([("Cohere Embed-4", "cyan"), ("Gemini 2.5 Flash", "violet"), ("Images · PDFs", "amber")])
@@ -1327,7 +1716,7 @@ def page_vision_rag():
     with st.container(key="rag_top"):
         left, right = st.columns(2, gap="medium")
         with left, st.container(key="card_keys"):
-            card_head("🔑", "API keys", "Kept in this browser session only. "
+            card_head("key-round", "API keys", "Kept in this browser session only. "
                       '<a href="https://dashboard.cohere.com/api-keys" target="_blank">Get a Cohere key</a> · '
                       '<a href="https://aistudio.google.com/app/apikey" target="_blank">Get a Google key</a>')
             cohere_key = st.text_input("Cohere API key", type="password", key="rag_cohere_key")
@@ -1338,7 +1727,7 @@ def page_vision_rag():
                 except Exception as exc:
                     notice("Couldn't start the API clients", short_error(exc), "error")
         with right, st.container(key="card_how"):
-            card_head("ℹ️", "How it works")
+            card_head("info", "How it works")
             html('<ol class="steps">'
                  '<li><span class="step-no">1</span><span><b>Embed</b> — every image or PDF page is embedded with '
                  '<b>Cohere Embed-4</b>, a multimodal model that reads charts without OCR.</span></li>'
@@ -1354,9 +1743,9 @@ def page_vision_rag():
     section("1 · Build the library", "Load the project's own figures, the original demo charts, or upload images and PDFs.")
     with st.container(key="card_library"):
         b = st.columns(3, gap="small")
-        load_project = b[0].button("🪐 Load project figures", key="rag_load_project", disabled=co is None, width="stretch")
-        load_demo = b[1].button("🌐 Load demo charts", key="rag_load_demo", disabled=co is None, width="stretch")
-        if b[2].button("🗑️ Clear library", key="rag_clear", disabled=not st.session_state.rag_paths, width="stretch"):
+        load_project = b[0].button("Load project figures", key="rag_load_project", icon=":material/folder_open:", disabled=co is None, width="stretch")
+        load_demo = b[1].button("Load demo charts", key="rag_load_demo", icon=":material/travel_explore:", disabled=co is None, width="stretch")
+        if b[2].button("Clear library", key="rag_clear", icon=":material/delete:", disabled=not st.session_state.rag_paths, width="stretch"):
             st.session_state.update(rag_paths=[], rag_emb=None, rag_seen=set(), rag_result=None)
             st.rerun()
 
@@ -1395,7 +1784,7 @@ def page_vision_rag():
                 st.session_state.rag_seen.add(sig)
 
         if st.session_state.rag_paths:
-            with st.expander(f"🖼️ View library ({len(st.session_state.rag_paths)})"):
+            with st.expander(f"View library ({len(st.session_state.rag_paths)})", icon=":material/photo_library:"):
                 cols = st.columns(5, gap="small")
                 for i, path in enumerate(st.session_state.rag_paths):
                     with cols[i % 5]:
@@ -1412,7 +1801,7 @@ def page_vision_rag():
         q_col, b_col = st.columns([3, 1], gap="small", vertical_alignment="bottom")
         question = q_col.text_input("Question", key="rag_question", disabled=not ready,
                                     placeholder="e.g. Which feature matters most for the XGBoost model?")
-        run = b_col.button("🚀 Run Vision RAG", key="rag_run", disabled=not (ready and question), width="stretch")
+        run = b_col.button("Run Vision RAG", key="rag_run", icon=":material/rocket_launch:", disabled=not (ready and question), width="stretch")
 
         if run:
             try:
@@ -1431,13 +1820,13 @@ def page_vision_rag():
         with st.container(key="rag_results"):
             img_col, ans_col = st.columns(2, gap="medium")
             with img_col, st.container(key="card_hit"):
-                card_head("🖼️", "Retrieved image", rag_source_label(res["hit"]))
+                card_head("image", "Retrieved image", rag_source_label(res["hit"]))
                 st.image(res["hit"])
                 html('<div class="card-divider"></div>')
-                card_head("📊", "Top matches", "Cosine similarity between your question and each image.")
+                card_head("chart-column", "Top matches", "Cosine similarity between your question and each image.")
                 st.plotly_chart(similarity_chart(res["scores"], res["paths"]), config=PLOTLY_CFG, key="rag_sim")
             with ans_col, st.container(key="card_answer"):
-                card_head("✨", "Answer", "Gemini 2.5 Flash, grounded in the retrieved image.")
+                card_head("sparkles", "Answer", "Gemini 2.5 Flash, grounded in the retrieved image.")
                 body = "<br>".join(line for line in res["answer"].replace("<", "&lt;").splitlines() if line.strip())
                 html(f'<div class="rag-answer">{body}</div>')
 
