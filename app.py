@@ -5,7 +5,9 @@ Run from the project root:
     .venv/bin/streamlit run app.py
 """
 
+import base64
 import difflib
+import json
 import os
 import random
 import re
@@ -17,6 +19,7 @@ import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
+import streamlit.components.v1 as components
 from PIL import Image, ImageDraw
 from sklearn.preprocessing import RobustScaler
 
@@ -1032,6 +1035,239 @@ def glass_table(rows: list[dict], columns: list[tuple[str, str, bool]], highligh
          f'<tbody>{body}</tbody></table></div>')
 
 
+# ── Evaluation figures carousel ───────────────────────────────────────────────
+EVAL_FIGURES = [
+    ("outputs/step9_model_comparison.png", "Model Comparison", "R², MAE, RMSE across all 4 models", "Step 9"),
+    ("outputs/step9_actual_vs_predicted.png", "Actual vs Predicted LSS", "XGBoost R²=0.9500 on 1,092 test planets", "Step 9"),
+    ("outputs/step10_leaderboard.png", "Model R² Leaderboard", "XGBoost leads at 0.9500", "Step 10"),
+    ("outputs/step11a_shap_global_importance.png", "SHAP Global Importance", "Equilibrium Temperature dominates at 0.0660", "Step 11A"),
+    ("outputs/step11b_shap_beeswarm.png", "SHAP Beeswarm", "Direction and distribution of feature effects", "Step 11B"),
+    ("outputs/step11c_shap_waterfall_kepler442b.png", "SHAP Waterfall: Kepler-442b", "Why Kepler-442b scores 0.9691", "Step 11C"),
+]
+
+# Carousel runs inside the component iframe; the modal is mounted into the parent Streamlit page
+# (the iframe is same-origin) so the overlay covers the real viewport, not just the 480px frame.
+EVAL_CAROUSEL_HTML = """
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { background: #0d1117; overflow: hidden; height: 100%;
+  font-family: "Source Sans Pro", system-ui, -apple-system, "Segoe UI", sans-serif; color: #fff; }
+.wrap { height: 100%; display: flex; flex-direction: column; justify-content: center; gap: 14px; padding: 14px 0 10px; }
+.stage { display: grid; grid-template-columns: 44px minmax(0, 1fr) 44px; align-items: center; gap: 10px; padding: 0 4px; }
+.viewport { overflow: hidden; perspective: 1400px; padding: 16px 6px 28px; margin: -16px -6px -28px; }
+.track { --gap: 18px; --n: 3; --offset: 0; display: flex; gap: var(--gap);
+  transform: translateX(calc(var(--offset) * -1 * (100% + var(--gap)) / var(--n)));
+  transition: transform 0.4s cubic-bezier(0.25, 0.46, 0.45, 0.94); transform-style: preserve-3d; }
+.card { --ry: 0deg; --lift: 0px; --s: 1; flex: 0 0 calc((100% - (var(--n) - 1) * var(--gap)) / var(--n)); min-width: 0;
+  position: relative; border-radius: 16px; overflow: hidden; cursor: pointer; outline: none;
+  background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.08);
+  transform: translateY(var(--lift)) rotateY(var(--ry)) scale(var(--s));
+  transition: transform 0.4s cubic-bezier(0.25, 0.46, 0.45, 0.94), box-shadow 0.4s ease, opacity 0.4s ease, border-color 0.3s ease; }
+.card.off { opacity: 0.35; }
+.card:hover, .card:focus-visible { --lift: -8px; box-shadow: 0 20px 40px rgba(0,255,150,0.15); border-color: rgba(0,255,150,0.28); }
+.thumb { display: block; width: 100%; height: clamp(190px, 26vw, 290px); object-fit: cover; object-position: center top;
+  background: #fff; border-bottom: 1px solid rgba(255,255,255,0.06); }
+.badge { display: inline-block; padding: 3px 10px; border-radius: 999px; font-size: 11px; font-weight: 600; letter-spacing: .03em;
+  color: #00ff96; background: rgba(13,17,23,0.82); border: 1px solid rgba(0,255,150,0.35); backdrop-filter: blur(6px); }
+.card .badge { position: absolute; top: 10px; left: 10px; }
+.meta { padding: 12px 14px 14px; }
+.title { font-size: 15px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sub { margin-top: 3px; font-size: 12.5px; color: rgba(255,255,255,0.5); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.arrow { width: 44px; height: 44px; border-radius: 50%; border: 1px solid rgba(255,255,255,0.12); background: rgba(255,255,255,0.05);
+  color: #fff; font-size: 18px; cursor: pointer; transition: background .2s ease, border-color .2s ease, opacity .2s ease; }
+.arrow:hover:not(:disabled) { background: rgba(0,255,150,0.12); border-color: rgba(0,255,150,0.4); }
+.arrow:disabled { opacity: 0.3; cursor: default; }
+.dots { display: flex; justify-content: center; gap: 8px; }
+.dot { width: 8px; height: 8px; border-radius: 999px; border: 0; background: rgba(255,255,255,0.2); cursor: pointer;
+  transition: width .3s ease, background .3s ease; }
+.dot.on { width: 20px; background: #00ff96; }
+@media (prefers-reduced-motion: reduce) { .track, .card { transition: none; } }
+</style>
+<div class="wrap">
+  <div class="stage">
+    <button class="arrow" id="prev" aria-label="Previous figures">&larr;</button>
+    <div class="viewport" id="viewport"><div class="track" id="track"></div></div>
+    <button class="arrow" id="next" aria-label="Next figures">&rarr;</button>
+  </div>
+  <div class="dots" id="dots"></div>
+</div>
+<script>
+const FIGS = __FIGS__;
+const track = document.getElementById("track"), dots = document.getElementById("dots");
+const esc = s => s.replace(/[&<>"]/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}[c]));
+let currentOffset = 0, perView = 3;
+
+FIGS.forEach((f, i) => {
+  const card = document.createElement("div");
+  card.className = "card"; card.tabIndex = 0; card.setAttribute("role", "button");
+  card.setAttribute("aria-label", `Expand ${f.title}`);
+  card.innerHTML = `<img class="thumb" src="data:image/png;base64,${f.b64}" alt="${esc(f.title)}">
+    <span class="badge">${esc(f.badge)}</span>
+    <div class="meta"><div class="title">${esc(f.title)}</div><div class="sub">${esc(f.subtitle)}</div></div>`;
+  card.addEventListener("click", () => openModal(i));
+  card.addEventListener("keydown", e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openModal(i); } });
+  track.appendChild(card);
+  const dot = document.createElement("button");
+  dot.className = "dot"; dot.setAttribute("aria-label", `Show ${f.title}`);
+  dot.addEventListener("click", () => { currentOffset = i; render(); });
+  dots.appendChild(dot);
+});
+
+function render() {
+  const w = document.getElementById("viewport").clientWidth;
+  perView = Math.min(FIGS.length, w < 460 ? 1 : w < 820 ? 2 : 3);
+  const maxOffset = FIGS.length - perView;
+  currentOffset = Math.max(0, Math.min(currentOffset, maxOffset));
+  track.style.setProperty("--n", perView);
+  track.style.setProperty("--offset", currentOffset);
+  const centre = (perView - 1) / 2;
+  [...track.children].forEach((card, i) => {
+    const rel = i - currentOffset, visible = rel >= 0 && rel < perView;
+    // Cards fan towards the centre; cards outside the window fold away
+    const ry = visible ? (centre - rel) * 7 : (rel < 0 ? 28 : -28);
+    card.style.setProperty("--ry", ry + "deg");
+    card.style.setProperty("--s", visible ? (perView > 1 && rel !== centre ? 0.96 : 1) : 0.88);
+    card.classList.toggle("off", !visible);
+    card.tabIndex = visible ? 0 : -1;
+  });
+  [...dots.children].forEach((d, i) => d.classList.toggle("on", i >= currentOffset && i < currentOffset + perView));
+  document.getElementById("prev").disabled = currentOffset === 0;
+  document.getElementById("next").disabled = currentOffset === maxOffset;
+}
+
+function slideCarousel(direction) { currentOffset += direction; render(); }
+document.getElementById("prev").addEventListener("click", () => slideCarousel(-1));
+document.getElementById("next").addEventListener("click", () => slideCarousel(1));
+new ResizeObserver(render).observe(document.getElementById("viewport"));
+
+let touchX = null;
+const vp = document.getElementById("viewport");
+vp.addEventListener("touchstart", e => { touchX = e.changedTouches[0].clientX; }, {passive: true});
+vp.addEventListener("touchend", e => {
+  if (touchX === null) return;
+  const dx = e.changedTouches[0].clientX - touchX; touchX = null;
+  if (Math.abs(dx) > 40) slideCarousel(dx < 0 ? 1 : -1);
+}, {passive: true});
+
+// ── Modal: mounted in the parent page when reachable, else inside this frame ──
+const MODAL_CSS = `
+#eval-modal { position: fixed; top: 0; left: 0; width: 100%; height: 100%; z-index: 9999; display: none;
+  align-items: center; justify-content: center; padding: 16px; background: rgba(0,0,0,0.75); backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px); font-family: "Source Sans Pro", system-ui, -apple-system, "Segoe UI", sans-serif; }
+#eval-modal.open { display: flex; }
+#eval-modal .em-box { position: relative; max-width: 85vw; max-height: 85vh; overflow: auto; padding: 60px 22px 20px;
+  background: rgba(13,17,23,0.85); backdrop-filter: blur(24px) saturate(180%); -webkit-backdrop-filter: blur(24px) saturate(180%);
+  border: 1px solid rgba(255,255,255,0.15); border-radius: 24px;
+  box-shadow: 0 32px 64px rgba(0,0,0,0.6), inset 0 1px 0 rgba(255,255,255,0.1); }
+#eval-modal.open .em-box { animation: emIn 0.25s ease-out; }
+#eval-modal .em-box::before { content: ""; position: absolute; inset: 0 0 auto 0; height: 120px; pointer-events: none;
+  border-radius: 24px 24px 0 0; background: linear-gradient(to bottom, rgba(0,255,150,0.05), transparent); }
+#eval-modal img { display: block; max-width: 100%; max-height: 65vh; margin: 0 auto; object-fit: contain; border-radius: 12px; }
+#eval-modal .em-meta { margin-top: 16px; }
+#eval-modal .em-badge { display: inline-block; padding: 3px 10px; border-radius: 999px; font-size: 11px; font-weight: 600;
+  letter-spacing: .03em; color: #00ff96; background: rgba(0,255,150,0.08); border: 1px solid rgba(0,255,150,0.35); }
+#eval-modal .em-title { margin-top: 8px; color: #fff; font-size: 20px; font-weight: 700; line-height: 1.3; }
+#eval-modal .em-sub { margin-top: 4px; color: rgba(255,255,255,0.6); font-size: 14px; }
+#eval-modal .em-close { position: absolute; top: 14px; right: 14px; z-index: 1; width: 36px; height: 36px; border-radius: 50%;
+  display: grid; place-items: center; padding: 0; outline: none; border: 1px solid rgba(255,255,255,0.12);
+  background: rgba(255,255,255,0.1); color: #fff; cursor: pointer; transition: background .2s ease; }
+#eval-modal .em-close:hover { background: rgba(255,255,255,0.2); }
+#eval-modal .em-close:focus-visible { box-shadow: 0 0 0 2px rgba(0,255,150,0.6); }
+@keyframes emIn { from { opacity: 0; transform: scale(0.92); } to { opacity: 1; transform: scale(1); } }
+@media (prefers-reduced-motion: reduce) { #eval-modal.open .em-box { animation: none; } }`;
+
+let host = document;
+try { if (window.parent !== window && window.parent.document.body) host = window.parent.document; } catch (e) {}
+host.getElementById("eval-modal")?.remove();          // stale copy from a previous rerun
+host.getElementById("eval-modal-css")?.remove();
+const style = host.createElement("style");
+style.id = "eval-modal-css"; style.textContent = MODAL_CSS; host.head.appendChild(style);
+const modal = host.createElement("div");
+modal.id = "eval-modal"; modal.setAttribute("role", "dialog"); modal.setAttribute("aria-modal", "true");
+modal.innerHTML = `<div class="em-box"><button class="em-close" aria-label="Close"><svg width="14" height="14" viewBox="0 0 14 14" fill="none"
+  stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M2 2l10 10M12 2L2 12"/></svg></button>
+  <img alt=""><div class="em-meta"><span class="em-badge"></span><div class="em-title"></div><div class="em-sub"></div></div></div>`;
+host.body.appendChild(modal);
+const box = modal.querySelector(".em-box");
+let lastFocus = null;
+
+function openModal(index) {
+  const f = FIGS[index];
+  modal.querySelector("img").src = `data:image/png;base64,${f.b64}`;
+  modal.querySelector("img").alt = f.title;
+  modal.querySelector(".em-badge").textContent = f.badge;
+  modal.querySelector(".em-title").textContent = f.title;
+  modal.querySelector(".em-sub").textContent = f.subtitle;
+  lastFocus = document.activeElement;
+  modal.classList.add("open");
+  modal.querySelector(".em-close").focus();
+}
+function closeModal() {
+  if (!modal.classList.contains("open")) return;
+  modal.classList.remove("open");
+  lastFocus?.focus?.();
+}
+modal.querySelector(".em-close").addEventListener("click", closeModal);
+modal.addEventListener("click", e => { if (!box.contains(e.target)) closeModal(); });   // overlay only
+modal.addEventListener("wheel", e => { if (!box.contains(e.target)) e.preventDefault(); }, {passive: false});
+const onKey = e => { if (e.key === "Escape") closeModal(); };
+const onFrameKey = e => {
+  onKey(e);
+  if (e.key === "ArrowLeft") slideCarousel(-1);
+  if (e.key === "ArrowRight") slideCarousel(1);
+};
+document.addEventListener("keydown", onFrameKey);
+if (host !== document) host.addEventListener("keydown", onKey);
+// The page's animated cursor (CURSOR_JS) hides over iframes, so replay mouse events on the parent with
+// translated coordinates. Hovering a card/arrow/dot fires on a hidden button so the cursor shows its hover state.
+let proxy = null;
+if (host !== document && host.documentElement.classList.contains("bbc-on")) {
+  document.documentElement.style.cursor = "none";
+  document.head.insertAdjacentHTML("beforeend", "<style>*, *::before, *::after { cursor: none !important; }</style>");
+  proxy = host.createElement("button");
+  proxy.hidden = true; proxy.tabIndex = -1; proxy.setAttribute("aria-hidden", "true");
+  host.body.appendChild(proxy);
+  const frameEl = window.frameElement;
+  const forward = e => {
+    const r = frameEl.getBoundingClientRect();
+    const clickable = e.target instanceof Element && e.target.closest(".card, .arrow, .dot");
+    const target = clickable && !clickable.disabled ? proxy : frameEl.parentElement;
+    target.dispatchEvent(new MouseEvent(e.type, {bubbles: true, clientX: r.left + e.clientX, clientY: r.top + e.clientY,
+                                                button: e.button, buttons: e.buttons}));
+  };
+  ["mousemove", "mousedown", "mouseup"].forEach(t => document.addEventListener(t, forward, {passive: true}));
+}
+window.addEventListener("pagehide", () => {           // iframe replaced on rerun/navigation: clean up the parent
+  if (host === document) return;
+  host.removeEventListener("keydown", onKey);
+  modal.remove(); style.remove(); proxy?.remove();
+});
+render();
+</script>
+"""
+
+
+@st.cache_data
+def _figure_b64(path: str, mtime: float) -> str:
+    return base64.b64encode(load_image(path)).decode()
+
+
+def render_evaluation_carousel():
+    """3D card carousel of the notebook's evaluation figures; clicking a card opens a glass modal."""
+    figs, missing = [], []
+    for rel, title, subtitle, badge in EVAL_FIGURES:
+        path = os.path.join(ROOT, rel)
+        if not os.path.exists(path):
+            missing.append(rel)
+            continue
+        figs.append({"b64": _figure_b64(path, os.path.getmtime(path)),
+                     "title": title, "subtitle": subtitle, "badge": badge})
+    if missing:
+        notice("Figure not found", f"{', '.join(missing)} missing — re-run the notebook.", "warn")
+    if figs:
+        components.html(EVAL_CAROUSEL_HTML.replace("__FIGS__", json.dumps(figs)), height=480)
+
+
 # ── Sidebar navigation ────────────────────────────────────────────────────────
 PAGES = [":material/account_tree: Pipeline Overview", ":material/travel_explore: Planet Explorer",
          ":material/tune: Design Your Planet", ":material/image_search: Vision RAG"]
@@ -1116,18 +1352,22 @@ def page_overview():
                    "{:.4f}", "%{y}: R² %{x:.4f}<extra></extra>", BAR_H, [0, 1.08])
         st.plotly_chart(fig, config=PLOTLY_CFG, key="model_chart")
 
-    # Figures from the notebook: a row of two equal cards
-    section("Evaluation figures", "Generated in notebook Steps 9 and 10.")
-    figures = [("card_fig_lb", "trophy", "Model R² leaderboard", LEADERBOARD_PNG, "Step 10 · R² of every model on the test set"),
-               ("card_fig_avp", "target", "Actual vs predicted", ACT_VS_PRED_PNG, "Step 9 · predicted vs actual LSS, test set")]
-    # Column widths follow the images' aspect ratios (2.0 vs 1.2) so both render at the same height
-    for col, (key, icon_name, title, path, caption) in zip(st.columns([1.7, 1], gap="medium"), figures):
-        with col, st.container(key=key):
-            card_head(icon_name, title)
-            if os.path.exists(path):
-                st.image(load_image(path), caption=caption)
-            else:
-                notice("Figure not found", f"{os.path.relpath(path, ROOT)} is missing — re-run the notebook.", "warn")
+    # Figures from the notebook: 3D carousel, click a card for the full-size modal
+    st.markdown("""
+<div style='margin-bottom: 8px;'>
+    <h3 style='color: white; margin: 0; font-size: 22px;'>
+        Evaluation figures
+    </h3>
+    <div style='width: 40px; height: 2px;
+                background: #00ff96; margin-top: 6px;'></div>
+    <p style='color: rgba(255,255,255,0.4); font-size: 13px;
+              margin-top: 8px;'>
+        Generated in notebook Steps 9, 10 and 11.
+        Click any card to expand.
+    </p>
+</div>
+""", unsafe_allow_html=True)
+    render_evaluation_carousel()
 
     validation_section()
     sensitivity_section()
